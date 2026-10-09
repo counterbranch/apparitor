@@ -123,6 +123,27 @@ def test_database_and_sidecars_remain_private_with_permissive_umask(tmp_path: Pa
         os.umask(original_umask)
 
 
+def test_reopen_secures_existing_database_and_sidecars(tmp_path: Path) -> None:
+    path = tmp_path / "audit.sqlite3"
+    with LocalAuditCollector(path) as first:
+        first.record(_evidence("evd_existing"))
+        files = list(tmp_path.glob("audit.sqlite3*"))
+        assert len(files) == 3
+        for file in files:
+            file.chmod(0o666)
+        with LocalAuditCollector(path) as second:
+            assert second.status().pending == 1
+            assert all(stat.S_IMODE(file.stat().st_mode) == 0o600 for file in files)
+
+
+def test_rejects_writable_database_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "shared"
+    parent.mkdir(mode=0o777)
+    parent.chmod(0o777)
+    with pytest.raises(PermissionError, match="group- or world-writable"):
+        LocalAuditCollector(parent / "audit.sqlite3")
+
+
 def test_full_queue_refuses_without_discarding_existing_record(tmp_path: Path) -> None:
     collector = LocalAuditCollector(tmp_path / "audit.sqlite3", max_pending_events=1)
     collector.record(_evidence("evd_one"))
@@ -245,6 +266,17 @@ def test_rejects_symlink_database(tmp_path: Path) -> None:
     link.symlink_to(target)
     with pytest.raises(ValueError, match="symlink"):
         LocalAuditCollector(link)
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_rejects_symlink_sidecar(tmp_path: Path, suffix: str) -> None:
+    path = tmp_path / "audit.sqlite3"
+    path.touch(mode=0o600)
+    target = tmp_path / "target-wal"
+    target.touch(mode=0o600)
+    Path(f"{path}{suffix}").symlink_to(target)
+    with pytest.raises(ValueError, match="sidecars"):
+        LocalAuditCollector(path)
 
 
 @pytest.mark.asyncio

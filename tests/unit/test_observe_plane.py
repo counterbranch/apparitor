@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -253,6 +254,41 @@ async def test_concurrent_ingest_queries_and_conflicts_preserve_transactions(
 
 
 @pytest.mark.asyncio
+async def test_requests_from_worker_threads_serialize_database_access(
+    client: httpx.AsyncClient,
+) -> None:
+    app = client._transport.app  # type: ignore[attr-defined]
+    barrier = threading.Barrier(12)
+
+    def request(number: int) -> int:
+        async def send() -> int:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://thread"
+            ) as threaded_client:
+                if number % 2:
+                    response = await threaded_client.get("/v1/events", headers=auth(READER_A))
+                else:
+                    response = await threaded_client.post(
+                        "/v1/events:ingest",
+                        json={"events": [event(f"thread-{number}")]},
+                        headers=auth(WRITER_A),
+                    )
+                return response.status_code
+
+        barrier.wait()
+        return asyncio.run(send())
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        loop = asyncio.get_running_loop()
+        statuses = await asyncio.gather(
+            *(loop.run_in_executor(executor, request, number) for number in range(12))
+        )
+    assert statuses == [200] * 12
+    result = await client.get("/v1/events?limit=100", headers=auth(READER_A))
+    assert result.json()["total"] == 6
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("headers", [{}, {"Content-Length": "1"}])
 async def test_streaming_body_limit_does_not_trust_content_length(
     client: httpx.AsyncClient, headers: dict[str, str]
@@ -398,7 +434,13 @@ def test_database_permissions_and_symlink_rejection(tmp_path: Path) -> None:
 
     import asyncio
 
-    asyncio.run(open_database())
+    original_umask = os.umask(0)
+    try:
+        asyncio.run(open_database())
+        database.chmod(0o666)
+        asyncio.run(open_database())
+    finally:
+        os.umask(original_umask)
     target = tmp_path / "target.db"
     target.touch(mode=0o600)
     link = tmp_path / "link.db"
@@ -411,3 +453,29 @@ def test_database_permissions_and_symlink_rejection(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="regular file"):
         asyncio.run(open_link())
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_database_rejects_symlink_sidecar(tmp_path: Path, suffix: str) -> None:
+    database = tmp_path / "observe.db"
+    database.touch(mode=0o600)
+    target = tmp_path / "target.wal"
+    target.touch(mode=0o600)
+    Path(f"{database}{suffix}").symlink_to(target)
+    credentials = {WRITER_A: observe.Credential(tenant_ref="tenant-a", role="writer")}
+    app = observe.create_app(database_path=database, credentials=credentials)
+
+    async def open_database() -> None:
+        async with app.router.lifespan_context(app):
+            pass
+
+    with pytest.raises(ValueError, match="regular files"):
+        asyncio.run(open_database())
+
+
+def test_database_rejects_writable_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "shared"
+    parent.mkdir(mode=0o777)
+    parent.chmod(0o777)
+    with pytest.raises(ValueError, match="private directory"):
+        observe._prepare_database(parent / "observe.db")

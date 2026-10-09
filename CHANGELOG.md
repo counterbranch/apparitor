@@ -8,7 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - LiteLLM Proxy custom guardrail using authenticated key-owner identity and fail-closed
-  checks for offered tools and returned tool calls. Streaming requests are refused.
+  checks for offered tools and returned tool calls, plus a resolved MCP execution guardrail.
+  Streaming and unresolved MCP requests are refused.
 - Optional bounded JSONL authorization evidence, separate host-observed execution
   outcomes and operational summaries; the existing text log grammar is unchanged.
 - Trace and identity provenance, structured reason codes, keyed argument fingerprints,
@@ -23,6 +24,10 @@ All notable changes to this project are documented here. The format follows
 - Repository and publisher documentation uses `counterbranch/apparitor` after the transfer.
 - Cedar extra targets the locally tested 4.12 line; EU and state-law evidence mappings
   distinguish current law, proposed measures and evidence not collected by this library.
+- Observe serializes its shared SQLite connection; database and WAL/SHM files are secured
+  to `0600` in owned directories without group/world write access.
+- Dependency updates include setup-uv 10.2.0 and cyclonedx-bom 7.5.0; Dependabot also tracks
+  API and Observe example requirements.
 - Install instructions now point at PyPI (`pip install apparitor`) now that the `0.1.x`
   line is published, replacing the previous install-from-source guidance.
 - **NeMo Guardrails rail migrated to NeMo's `RailOutcome` contract (breaking; requires
