@@ -140,7 +140,6 @@ def create_app(
             context={
                 "tenant": principal.tenant,
                 "correlation_id": str(uuid4()),
-                "requested_properties": body.properties,
             },
         )
         with audit_metadata_scope(

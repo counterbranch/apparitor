@@ -307,6 +307,49 @@ async def test_responses_api_unsupported_executable_type_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item_type",
+    [
+        "function_call_output",
+        "computer_call_output",
+        "local_shell_call_output",
+        "custom_tool_call_output",
+        "mcp_list_tools",
+        "mcp_approval_request",
+        "mcp_approval_response",
+        "tool_search_output",
+    ],
+)
+async def test_responses_api_output_only_tool_results_and_approvals_refuse(item_type: str) -> None:
+    guardrail, engine = _guardrail()
+    response = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="test",
+        object="response",
+        output=[
+            {
+                "type": item_type,
+                "id": "item_1",
+                "call_id": "call_1",
+                "name": "read_file",
+                "arguments": "{}",
+                "output": {},
+                "server_label": "server",
+                "tools": [],
+                "approval_request_id": "approval_1",
+                "approve": True,
+            }
+        ],
+        status="completed",
+    )
+    with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+        await guardrail.async_post_call_success_hook({}, _auth(), response)
+    assert engine.calls == []
+    assert engine.refusals == 1
+
+
+@pytest.mark.asyncio
 async def test_streaming_is_refused_before_any_chunk_is_consumed() -> None:
     guardrail, engine = _guardrail()
     consumed = False
@@ -541,7 +584,33 @@ async def test_audit_resolver_failure_does_not_change_authorization(
                 )
             assert exc.value.status_code == 403
     assert sink.records == []
-    assert guardrail._engine.audit_failures == 1
+    assert guardrail.audit_failures == 1
+    assert guardrail.audit_metadata_failures == 1
+    await guardrail.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_metadata", [None, {}, "untrusted metadata"])
+async def test_invalid_audit_metadata_is_observable_even_without_tool_calls(
+    bad_metadata: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    sink = AuditCollector()
+    guardrail = LiteLLMAuthorizationGuardrail(
+        "https://pdp.example.com",
+        audit_sink=sink,
+        audit_metadata_resolver=lambda auth: bad_metadata,
+    )
+    data: dict[str, Any] = {"messages": [{"role": "user", "content": "hello"}]}
+    response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "hello"}}])
+    with audit_metadata_scope(AuditMetadata(event_id="outer", tenant_ref="outer-tenant")):
+        assert (
+            await guardrail.async_pre_call_hook(_auth(), object(), data, "completion")  # type: ignore[arg-type]
+        ) is data
+        assert (await guardrail.async_post_call_success_hook({}, _auth(), response)) is response
+    assert guardrail.audit_metadata_failures == 2
+    assert guardrail.audit_failures == 0
+    assert sink.records == []
+    assert "untrusted metadata" not in caplog.text
     await guardrail.aclose()
 
 
@@ -685,12 +754,140 @@ async def test_guardrail_does_not_copy_raw_response_into_logging_metadata(caplog
     assert secret not in caplog.text
 
 
-@pytest.mark.parametrize("call_type", ["send_message", "asend_message"])
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        "send_message",
+        "asend_message",
+        "_arealtime",
+        "arealtime",
+        "_aresponses_websocket",
+        "aresponses_websocket",
+        "call_mcp_tool",
+        "list_mcp_tools",
+        "passthrough",
+        "pass_through_endpoint",
+        "llm_passthrough_route",
+        "allm_passthrough_route",
+    ],
+)
 @pytest.mark.asyncio
-async def test_a2a_proxy_invocation_is_refused_before_agent_execution(call_type: str) -> None:
+async def test_direct_pre_hook_refuses_unsupported_route_names(call_type: str) -> None:
     guardrail, engine = _guardrail()
-    with pytest.raises(GuardrailRaisedException, match="A2A proxy routes require"):
+    with pytest.raises(GuardrailRaisedException, match="proxy route requires"):
         await guardrail.async_pre_call_hook(_auth(), object(), {}, call_type)
+    assert engine.calls == []
+    assert engine.refusals == 1
+
+
+@pytest.mark.asyncio
+async def test_litellm_dispatch_selects_model_hooks_but_skips_mcp_gateway() -> None:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    guardrail = LiteLLMAuthorizationGuardrail("https://pdp.example.com", default_on=True)
+    try:
+        assert guardrail.should_run_guardrail({}, GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail({}, GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail({}, GuardrailEventHooks.pre_mcp_call) is False
+        assert guardrail.should_run_guardrail({}, GuardrailEventHooks.during_mcp_call) is False
+    finally:
+        await guardrail.aclose()
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_dispatch_remaps_mcp_before_selecting_guardrail() -> None:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    proxy_utils = pytest.importorskip("litellm.proxy.utils", exc_type=ImportError)
+    guardrail = LiteLLMAuthorizationGuardrail("https://pdp.example.com", default_on=True)
+    try:
+        dispatcher = proxy_utils.ProxyLogging.__new__(proxy_utils.ProxyLogging)
+        assert (
+            await dispatcher._process_guardrail_callback(
+                callback=guardrail,
+                data={},
+                user_api_key_dict=_auth(),
+                call_type="call_mcp_tool",
+                event_type=GuardrailEventHooks.pre_call,
+            )
+        ) is None
+    finally:
+        await guardrail.aclose()
+
+
+@pytest.mark.asyncio
+async def test_client_function_result_input_remains_supported() -> None:
+    guardrail, engine = _guardrail()
+    data = {"input": [{"type": "function_call_output", "call_id": "call_1", "output": "done"}]}
+    assert (
+        await guardrail.async_pre_call_hook(_auth(), object(), data, "responses")  # type: ignore[arg-type]
+    ) is data
+    assert engine.calls == []
+    assert engine.refusals == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"tools": [{"type": "computer_use_preview"}]},
+        {"tools": []},
+        {"functions": [{"name": "shell"}]},
+        {"background": True},
+        {"background": "true"},
+        {"stream": True},
+        {"stream": "true"},
+        {"mcp_servers": {}},
+        {"web_search_options": {}},
+        [],
+        "unverifiable",
+    ],
+)
+async def test_extra_body_cannot_override_validated_execution_controls(extra_body: Any) -> None:
+    guardrail, engine = _guardrail(authorize_offered_tools=False)
+    with pytest.raises(GuardrailRaisedException, match="extra_body execution controls"):
+        await guardrail.async_pre_call_hook(
+            _auth(),
+            object(),
+            {"extra_body": extra_body},
+            "responses",  # type: ignore[arg-type]
+        )
+    assert engine.calls == []
+    assert engine.refusals == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        None,
+        {},
+        {"reasoning_effort": "low", "tool_choice": "auto"},
+        {"background": False, "stream": False},
+    ],
+)
+async def test_extra_body_non_execution_parameters_remain_supported(extra_body: Any) -> None:
+    guardrail, engine = _guardrail()
+    data = {"extra_body": extra_body}
+    assert (
+        await guardrail.async_pre_call_hook(_auth(), object(), data, "responses")  # type: ignore[arg-type]
+    ) is data
+    assert engine.calls == []
+    assert engine.refusals == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["stream", "background"])
+@pytest.mark.parametrize("value", ["true", "false", 1, 0, {}, []])
+async def test_execution_flags_cannot_use_provider_type_coercion(field: str, value: Any) -> None:
+    guardrail, engine = _guardrail()
+    with pytest.raises(GuardrailRaisedException):
+        await guardrail.async_pre_call_hook(
+            _auth(),
+            object(),
+            {field: value},
+            "responses",  # type: ignore[arg-type]
+        )
     assert engine.calls == []
     assert engine.refusals == 1
 

@@ -48,6 +48,8 @@ class CollectorStatus:
     failures: int
     refused: int
     conflicts: int
+    retained_receipts: int = 0
+    receipt_evictions: int = 0
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,9 @@ class LocalAuditCollector:
                 "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0), MIN(created_at) FROM outbox"
             ).fetchone()
             counters = dict(self._connection.execute("SELECT name, value FROM counters"))
+            retained_receipts = self._connection.execute(
+                "SELECT COUNT(*) FROM delivered_receipts"
+            ).fetchone()[0]
         age = None if oldest is None else max(0.0, time.time() - float(oldest))
         return CollectorStatus(
             pending=int(pending),
@@ -207,6 +212,8 @@ class LocalAuditCollector:
             failures=counters.get("failures", 0),
             refused=counters.get("refused", 0),
             conflicts=counters.get("conflicts", 0),
+            retained_receipts=int(retained_receipts),
+            receipt_evictions=counters.get("receipt_evictions", 0),
         )
 
     def _lease(self, batch_size: int) -> tuple[DeliveryEvent, ...]:
@@ -270,6 +277,7 @@ class LocalAuditCollector:
                         "(SELECT evidence_id FROM delivered_receipts "
                         "ORDER BY delivered_at LIMIT 1)"
                     )
+                    self._increment("receipt_evictions")
                     receipt_count, receipt_bytes = self._connection.execute(
                         "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM delivered_receipts"
                     ).fetchone()

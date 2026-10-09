@@ -156,15 +156,24 @@ _BENIGN_RESPONSES_OUTPUT_TYPES = frozenset(
     {
         "message",
         "reasoning",
-        "function_call_output",
-        "computer_call_output",
-        "custom_tool_call_output",
-        "local_shell_call_output",
-        "mcp_list_tools",
-        "mcp_approval_request",
-        "mcp_approval_response",
-        "tool_search_output",
         "compaction",
+    }
+)
+
+_UNSUPPORTED_PROXY_ROUTES = frozenset(
+    {
+        "send_message",
+        "asend_message",
+        "_arealtime",
+        "arealtime",
+        "_aresponses_websocket",
+        "aresponses_websocket",
+        "call_mcp_tool",
+        "list_mcp_tools",
+        "passthrough",
+        "pass_through_endpoint",
+        "llm_passthrough_route",
+        "allm_passthrough_route",
     }
 )
 
@@ -300,6 +309,17 @@ class LiteLLMAuthorizationGuardrail(CustomGuardrail):  # type: ignore[misc]  # S
         self._identity_resolver = identity_resolver
         self._authorize_offered_tools = authorize_offered_tools
         self._audit_metadata_resolver = audit_metadata_resolver
+        self._audit_metadata_failures = 0
+
+    @property
+    def audit_metadata_failures(self) -> int:
+        """Resolver failures across hooks, including hooks with no authorization event."""
+        return self._audit_metadata_failures
+
+    @property
+    def audit_failures(self) -> int:
+        """Evidence emission failures counted by the authorization engine."""
+        return self._engine.audit_failures
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -323,6 +343,7 @@ class LiteLLMAuthorizationGuardrail(CustomGuardrail):  # type: ignore[misc]  # S
             if not isinstance(metadata, AuditMetadata):
                 raise TypeError("resolver did not return AuditMetadata")
         except (Exception, asyncio.CancelledError):
+            self._audit_metadata_failures += 1
             logger.warning("apparitor: LiteLLM audit metadata resolution failed")
             metadata = None
         return audit_metadata_scope(metadata)
@@ -366,13 +387,31 @@ class LiteLLMAuthorizationGuardrail(CustomGuardrail):  # type: ignore[misc]  # S
     ) -> dict[str, Any]:
         del cache
         with self._audit_scope(user_api_key_dict):
-            if call_type in ("send_message", "asend_message"):
+            if call_type in _UNSUPPORTED_PROXY_ROUTES:
                 raise self._boundary_refusal(
-                    "A2A proxy routes require an execution-boundary authorization adapter"
+                    "proxy route requires an execution-boundary authorization adapter"
                 )
-            if data.get("background") is True:
+            extra_body = data.get("extra_body")
+            if extra_body is not None and (
+                not isinstance(extra_body, Mapping)
+                or any(
+                    extra_body.get(field) is not None
+                    for field in (
+                        "tools",
+                        "functions",
+                        "mcp_servers",
+                        "web_search_options",
+                    )
+                )
+                or any(
+                    extra_body.get(field) is not None and extra_body.get(field) is not False
+                    for field in ("background", "stream")
+                )
+            ):
+                raise self._boundary_refusal("extra_body execution controls are unsupported")
+            if data.get("background") is not None and data.get("background") is not False:
                 raise self._boundary_refusal("background responses are unsupported")
-            if data.get("stream") is True:
+            if data.get("stream") is not None and data.get("stream") is not False:
                 raise self._boundary_refusal(_STREAMING_UNSUPPORTED)
             if any(data.get(field) is not None for field in ("mcp_servers", "web_search_options")):
                 raise self._boundary_refusal("provider-executed tools are unsupported")

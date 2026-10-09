@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import stat
 from dataclasses import replace
 from pathlib import Path
 
@@ -64,6 +66,61 @@ def test_idempotent_insert_and_conflict_are_observable(tmp_path: Path) -> None:
     assert status.pending == 1
     assert status.conflicts == 1
     collector.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound", ["rows", "bytes"])
+async def test_receipt_eviction_exposes_finite_deduplication_window(
+    tmp_path: Path, bound: str
+) -> None:
+    path = tmp_path / "audit.sqlite3"
+    first = _evidence("evd_first")
+    second = _evidence("evd_other")
+    limits = (
+        {"max_pending_events": 1}
+        if bound == "rows"
+        else {"max_pending_bytes": max(len(first.to_json()), len(second.to_json())) + 16}
+    )
+
+    async def accept(events):
+        return DeliveryResult(frozenset(event.evidence_id for event in events))
+
+    with LocalAuditCollector(path, **limits) as collector:
+        for record in (first, second):
+            collector.record(record)
+            assert (await collector.flush(accept)).delivered == 1
+        assert collector.status().retained_receipts == 1
+        assert collector.status().receipt_evictions == 1
+
+    with LocalAuditCollector(path, **limits) as reopened:
+        assert reopened.status().receipt_evictions == 1
+        reopened.record(second)
+        assert reopened.status().pending == 0
+        with pytest.raises(ValueError, match="different content"):
+            reopened.record(replace(second, event_id="changed"))
+        reopened.record(replace(first, event_id="changed"))
+        assert reopened.status().pending == 1
+        assert reopened.status().conflicts == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_database_and_sidecars_remain_private_with_permissive_umask(tmp_path: Path) -> None:
+    path = tmp_path / "audit.sqlite3"
+    record = _evidence("evd_private")
+    original_umask = os.umask(0)
+    try:
+        for _ in range(2):
+            with LocalAuditCollector(path) as collector:
+                collector.record(record)
+                files = list(tmp_path.glob("audit.sqlite3*"))
+                assert {file.name for file in files} == {
+                    "audit.sqlite3",
+                    "audit.sqlite3-wal",
+                    "audit.sqlite3-shm",
+                }
+                assert all(stat.S_IMODE(file.stat().st_mode) == 0o600 for file in files)
+    finally:
+        os.umask(original_umask)
 
 
 def test_full_queue_refuses_without_discarding_existing_record(tmp_path: Path) -> None:

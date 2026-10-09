@@ -193,11 +193,11 @@ async def test_denied_existing_and_missing_documents_never_access_store(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_client_properties_cannot_supply_authoritative_resource_attributes() -> None:
+async def test_client_properties_cannot_reach_authorization_context_or_attributes() -> None:
     class AttributeBackend(Backend):
         async def evaluate(self, evaluation):
             assert evaluation.resource.properties == {}
-            assert evaluation.context["requested_properties"] == {"owner": "user-1"}
+            assert set(evaluation.context) == {"tenant", "correlation_id"}
             return EvaluationResponse(decision=False)
 
     engine = AuthorizationEngine(ScannerConfig(agent_id="fixture"), client=AttributeBackend())

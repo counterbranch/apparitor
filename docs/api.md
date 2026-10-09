@@ -12,8 +12,8 @@ core dependency set does not include FastAPI. The sample's `x-demo-subject` and
 verified authentication dependency. Do not decode an unverified bearer token in this
 adapter. The tenant is taken from that trusted resolver and compared with the request body
 before evaluation; it is also forwarded in AuthZEN `context` for policy cross-checking.
-Caller-supplied properties are explicitly untrusted request data under
-`context.requested_properties`. They never populate authoritative resource attributes.
+Caller-supplied `properties` are accepted as inert request data and are not forwarded to
+the policy request or its fingerprint. They never populate resource attributes or context.
 The host must obtain ownership, classification and other authority-bearing attributes
 from its own resource store before adding them to a policy request.
 

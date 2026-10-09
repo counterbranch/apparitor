@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -219,6 +220,36 @@ async def test_ingest_and_read_database_operations_share_event_loop_thread(
     assert (await client.get("/v1/events/threaded", headers=auth(READER_A))).status_code == 200
     assert (await client.get("/v1/summary", headers=auth(READER_A))).status_code == 200
     assert database_threads == {threading.get_ident()}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_ingest_queries_and_conflicts_preserve_transactions(
+    client: httpx.AsyncClient,
+) -> None:
+    seed = event("same")
+    assert (
+        await client.post("/v1/events:ingest", json={"events": [seed]}, headers=auth(WRITER_A))
+    ).status_code == 200
+
+    async def ingest(number: int) -> None:
+        records = (
+            [seed, event(f"new-{number}")]
+            if number % 2 == 0
+            else [event(f"rolledback-{number}"), event("same", verdict="allow")]
+        )
+        response = await client.post(
+            "/v1/events:ingest", json={"events": records}, headers=auth(WRITER_A)
+        )
+        assert response.status_code == (200 if number % 2 == 0 else 409)
+
+    async def query() -> None:
+        for route in ("/v1/events", "/v1/traces/trace-a", "/v1/summary"):
+            assert (await client.get(route, headers=auth(READER_A))).status_code == 200
+
+    await asyncio.gather(*(ingest(number) for number in range(40)), *(query() for _ in range(20)))
+    result = (await client.get("/v1/events?limit=100", headers=auth(READER_A))).json()
+    assert result["total"] == 21
+    assert not any(item["evidence_id"].startswith("rolledback") for item in result["items"])
 
 
 @pytest.mark.asyncio

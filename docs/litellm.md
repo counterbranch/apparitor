@@ -1,5 +1,11 @@
 # LiteLLM Proxy
 
+Use this adapter with an installed LiteLLM Proxy. Its host needs LiteLLM's `proxy` extra;
+Apparitor's `litellm` extra keeps the library dependency separate. To run the proxy integration
+tests, install `pip install -e '.[dev,litellm]' 'litellm[proxy]'` and the HTTP example
+requirements. CI imports the proxy dispatcher before testing so missing proxy dependencies
+fail that job rather than silently skipping its dispatcher regression.
+
 `apparitor.litellm.LiteLLMAuthorizationGuardrail` is a LiteLLM Proxy custom guardrail. It
 uses the proxy's authenticated `UserAPIKeyAuth.user_id` as an Apparitor `user` subject,
 checks tools before they are offered to the model, and checks every tool call in the completed
@@ -62,8 +68,14 @@ authenticated `UserAPIKeyAuth` object and must return a validated `AuditMetadata
 request. Apparitor scopes that metadata across the whole pre-call, post-call, or streaming hook,
 including early refusals, then clears it. Request fields and model output never reach the
 resolver. A resolver failure is logged without its exception detail, clears any unrelated outer
-audit scope, and does not change the authorization verdict; the engine counts the missing
-evidence in `audit_failures`. Pass `audit_fingerprint_key` to emit tenant-bound HMAC fingerprints
+audit scope, and does not change the authorization verdict. Monitor the guardrail's public
+`audit_metadata_failures` counter, which increments immediately even on hooks with no tool
+calls, and `audit_failures`, which counts failed engine evidence emissions. These counters
+are process-local; the host must export and alert on them separately from the evidence sink.
+The sink alone cannot show this loss: without trusted metadata Apparitor cannot safely assign
+a tenant to a `collection_gap` record. The host may emit such a record through a separately
+trusted audit scope. Do not interpret silence at the sink as complete collection.
+Pass `audit_fingerprint_key` to emit tenant-bound HMAC fingerprints
 of exact tool arguments without retaining the arguments themselves. Other Apparitor adapters
 that do not have an authentication-object resolver require the host to establish an explicit
 `audit_metadata_scope` around each request.
@@ -84,12 +96,24 @@ Responses API custom, computer, MCP, shell, code-interpreter, image-generation, 
 apply-patch, programmatic, and tool-search calls are not mapped to Apparitor tool resources and
 are refused. Add a server-side adapter at the corresponding execution boundary before enabling
 those call types.
+Tool-result, MCP discovery/approval, and tool-search output items are also refused, even when
+the response contains no call item. A post-call hook cannot authorize work already performed
+by a provider; refusing its output prevents releasing the unverified result but cannot undo
+that work. Only ordinary message, reasoning and compaction items pass without a tool check.
 
 LiteLLM's A2A `send_message` routes are refused in pre-call, before an agent can run.
 Their post-call results cannot authorize actions an agent already performed. Use Apparitor's
 A2A executor at the agent server and scope this proxy guardrail to supported model routes.
 Background Responses API requests are likewise refused before dispatch because their completed
 output would escape the synchronous post-call authorization boundary.
+Realtime, Responses WebSocket and generic passthrough routes are also refused:
+these routes cannot supply the completed, client-executed function-call
+boundary required by this adapter.
+LiteLLM's standalone MCP gateway dispatches tool calls to `pre_mcp_call`/`during_mcp_call`
+guardrails and does not dispatch discovery to this adapter. Apparitor registers only
+`pre_call` and `post_call`, so it does not mediate that gateway. Hosts must disable the
+gateway or restrict these keys' access to it; direct-hook refusal constants cannot enforce
+that restriction. MCP gateway hook support requires a separate execution-boundary adapter.
 
 Pre-call declarations support client-executed function tools, including Anthropic's ordinary
 named tool declarations. Provider-hosted, custom, computer, MCP and other tool kinds are
@@ -97,8 +121,14 @@ refused before the provider call. Unknown Anthropic content blocks are also refu
 ordinary text/thinking blocks and supported `tool_use` calls pass post-call classification.
 Non-null `mcp_servers` and `web_search_options` request fields are refused independently
 of the `tools` array, including empty configurations. Hosts must restrict routes and provider
-configuration to client-executed tools; the hooks cannot discover execution capabilities
+configuration to client-executed tools. Non-null `tools`, `functions`, `mcp_servers` or
+`web_search_options` in `extra_body` are refused because provider passthrough fields can
+override the top-level request after pre-call validation. At either request level,
+`background` and `stream` must be absent, null or false. Other provider parameters in an
+`extra_body` mapping remain supported. The hooks cannot discover execution capabilities
 enabled only in provider or proxy configuration.
+Disable proxy-side automatic tool execution and injected tools on these routes. The client
+executor must wait for successful post-call authorization before executing any returned call.
 Other LiteLLM telemetry configuration remains the host's responsibility.
 
 The authorization hooks do not use LiteLLM's generic raw-response logging decorator. They

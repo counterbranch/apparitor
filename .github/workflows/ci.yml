@@ -150,9 +150,9 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-      - run: uv pip install --system -e ".[dev,litellm]" -r examples/api/requirements.txt
+      - run: uv pip install --system -e ".[dev,litellm]" "litellm[proxy]" -r examples/api/requirements.txt -r examples/observe/requirements.txt
       - name: Verify LiteLLM guardrail imports
-        run: python -c "import fastapi; from apparitor import LiteLLMAuthorizationGuardrail; import examples.observe.app"
+        run: python -c "import fastapi; from litellm.proxy.utils import ProxyLogging; from apparitor import LiteLLMAuthorizationGuardrail; import examples.observe.app"
       - name: Pytest (LiteLLM guardrail and HTTP examples)
         run: pytest tests/unit/test_litellm.py tests/unit/test_api_example.py tests/unit/test_observe_plane.py tests/unit/test_observe_pipeline.py -p no:cacheprovider --no-cov
 
