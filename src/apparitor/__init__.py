@@ -99,7 +99,7 @@ if TYPE_CHECKING:
     from .a2a import A2AAuthorizationExecutor
     from .cedar import CedarBackend
     from .fastmcp import FastMCPAuthorizationMiddleware
-    from .litellm import LiteLLMAuthorizationGuardrail
+    from .litellm import LiteLLMAuthorizationGuardrail, LiteLLMMCPAuthorizationGuardrail
     from .nemo import NeMoAuthorizationRails
     from .scanner import AuthZENScanner
 
@@ -111,6 +111,7 @@ __all__ = [  # noqa: RUF022 - grouped by concern, not alphabetised, for readabil
     "FastMCPAuthorizationMiddleware",
     "A2AAuthorizationExecutor",
     "LiteLLMAuthorizationGuardrail",
+    "LiteLLMMCPAuthorizationGuardrail",
     # evidence (no host SDK dependency)
     "AuditEvidence",
     "AuditMetadata",
@@ -200,6 +201,7 @@ _LAZY_EXPORTS = {
     "FastMCPAuthorizationMiddleware": "fastmcp",
     "A2AAuthorizationExecutor": "a2a",
     "LiteLLMAuthorizationGuardrail": "litellm",
+    "LiteLLMMCPAuthorizationGuardrail": "litellm",
 }
 
 

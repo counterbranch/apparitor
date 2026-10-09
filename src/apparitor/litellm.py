@@ -25,7 +25,7 @@ from .config import ScannerConfig
 from .decision import Verdict, VerdictResult, VerdictStatus, is_allowed_gateway
 from .engine import ReviewPredicate, build_engine, resolve_config
 from .errors import AuthZENConfigError, MissingDependencyError
-from .mapping import ToolCallMapper
+from .mapping import MCP_SERVER_LABEL_KEY, MCPResourceMapper, ToolCallMapper
 from .models import Subject
 
 try:  # pragma: no cover - exercised by the optional-dependency import test
@@ -286,12 +286,13 @@ class LiteLLMAuthorizationGuardrail(CustomGuardrail):  # type: ignore[misc]  # S
                 "audit_metadata_resolver is required when audit_sink is configured"
             )
         required_hooks = self.get_supported_event_hooks()
+        required_names = " and ".join(hook.value for hook in required_hooks)
         selected = kwargs.get("event_hook", required_hooks)
         if not isinstance(selected, (list, tuple)) or set(selected) != set(required_hooks):
-            raise AuthZENConfigError("LiteLLM authorization requires pre_call and post_call hooks")
+            raise AuthZENConfigError(f"LiteLLM authorization requires {required_names} hooks")
         supported = kwargs.get("supported_event_hooks", required_hooks)
         if not isinstance(supported, (list, tuple)) or set(supported) != set(required_hooks):
-            raise AuthZENConfigError("LiteLLM authorization must support both required hooks")
+            raise AuthZENConfigError("LiteLLM authorization must support all required hooks")
         kwargs["supported_event_hooks"] = required_hooks
         kwargs["event_hook"] = required_hooks
         super().__init__(guardrail_name=guardrail_name, **kwargs)
@@ -363,9 +364,15 @@ class LiteLLMAuthorizationGuardrail(CustomGuardrail):  # type: ignore[misc]  # S
         return self._refusal(reason)
 
     async def _authorize(
-        self, calls: list[NormalizedToolCall] | list[dict[str, Any]], auth: UserAPIKeyAuth
+        self,
+        calls: list[NormalizedToolCall] | list[dict[str, Any]],
+        auth: UserAPIKeyAuth,
+        *,
+        server_label: str | None = None,
     ) -> None:
         context = self._context(auth)
+        if server_label is not None:
+            context[MCP_SERVER_LABEL_KEY] = server_label
         try:
             if calls and isinstance(calls[0], NormalizedToolCall):
                 verdict = await self._engine.evaluate_normalized(calls, context)
@@ -456,6 +463,81 @@ class LiteLLMAuthorizationGuardrail(CustomGuardrail):  # type: ignore[misc]  # S
     async def aclose(self) -> None:
         """Close an Apparitor-owned backend client."""
         await self._engine.aclose()
+
+
+class LiteLLMMCPAuthorizationGuardrail(LiteLLMAuthorizationGuardrail):
+    """Authorize LiteLLM gateway MCP calls before upstream execution."""
+
+    def __init__(
+        self,
+        pdp_url: str | None = None,
+        *,
+        config: ScannerConfig | None = None,
+        mapper: ToolCallMapper | None = None,
+        guardrail_name: str = "apparitor-mcp",
+        **kwargs: Any,
+    ) -> None:
+        if kwargs.setdefault("default_on", True) is not True:
+            raise AuthZENConfigError("MCP authorization requires default_on=True")
+        if kwargs.get("run_in_parallel") or kwargs.get("scan_raw_request"):
+            raise AuthZENConfigError(
+                "MCP authorization requires sequential live-request evaluation"
+            )
+        resolved = resolve_config(pdp_url, config)
+        super().__init__(
+            config=resolved,
+            mapper=mapper or MCPResourceMapper(resolved),
+            guardrail_name=guardrail_name,
+            **kwargs,
+        )
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [GuardrailEventHooks.pre_mcp_call]
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, Any],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, Any]:
+        del cache
+        with self._audit_scope(user_api_key_dict):
+            if call_type != "call_mcp_tool":
+                raise self._boundary_refusal("MCP authorization requires an MCP execution route")
+            if not any(
+                key in data for key in ("mcp_tool_name", "mcp_arguments", "mcp_server_name")
+            ):
+                # LiteLLM also dispatches an initial REST/virtual-tool request before
+                # resolving the server. Only the later server-bound hook can authorize it.
+                if not isinstance(data.get("name"), str) or not data["name"].strip():
+                    raise self._boundary_refusal("MCP preliminary request could not be verified")
+                self._context(user_api_key_dict)
+                return data
+            name = data.get("mcp_tool_name")
+            server = data.get("mcp_server_name")
+            arguments = data.get("mcp_arguments")
+            modified = data.get("modified_arguments")
+            if modified is not None and not isinstance(modified, dict):
+                raise self._boundary_refusal("MCP arguments could not be verified")
+            # LiteLLM applies only truthy modified_arguments after all pre-call hooks.
+            if modified:
+                arguments = modified
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(server, str)
+                or not server.strip()
+                or not isinstance(arguments, dict)
+            ):
+                raise self._boundary_refusal("MCP execution context could not be verified")
+            await self._authorize(
+                [NormalizedToolCall(name=name, arguments=arguments, id=None)],
+                user_api_key_dict,
+                server_label=server,
+            )
+            return data
 
 
 def _is_policy_block(verdict: VerdictResult) -> bool:

@@ -109,11 +109,8 @@ output would escape the synchronous post-call authorization boundary.
 Realtime, Responses WebSocket and generic passthrough routes are also refused:
 these routes cannot supply the completed, client-executed function-call
 boundary required by this adapter.
-LiteLLM's standalone MCP gateway dispatches tool calls to `pre_mcp_call`/`during_mcp_call`
-guardrails and does not dispatch discovery to this adapter. Apparitor registers only
-`pre_call` and `post_call`, so it does not mediate that gateway. Hosts must disable the
-gateway or restrict these keys' access to it; direct-hook refusal constants cannot enforce
-that restriction. MCP gateway hook support requires a separate execution-boundary adapter.
+For the standalone MCP gateway, also install the dedicated MCP guardrail below. The model
+guardrail's `pre_call`/`post_call` hooks do not mediate gateway execution.
 
 Pre-call declarations support client-executed function tools, including Anthropic's ordinary
 named tool declarations. Provider-hosted, custom, computer, MCP and other tool kinds are
@@ -152,6 +149,73 @@ proxy response or executes tools through a separate channel. Put a server-side a
 Apparitor's FastMCP middleware at the execution boundary when that boundary is available.
 
 Call `await guardrail.aclose()` during proxy shutdown when Apparitor owns the PDP client.
+
+## MCP gateway execution
+
+`LiteLLMMCPAuthorizationGuardrail` uses LiteLLM's `pre_mcp_call` event to authorize each
+resolved gateway tool invocation before the upstream call starts. Install it alongside
+the model guardrail when serving both surfaces:
+
+```python
+from apparitor.litellm import LiteLLMMCPAuthorizationGuardrail
+
+
+class ApparitorMCPGuardrail(LiteLLMMCPAuthorizationGuardrail):
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(pdp_url=os.environ["APPARITOR_PDP_URL"], **kwargs)
+```
+
+```yaml
+  - guardrail_name: apparitor-mcp
+    litellm_params:
+      guardrail: path.to.callback.ApparitorMCPGuardrail
+      mode:
+        - pre_mcp_call
+      default_on: true
+```
+
+`default_on: true` is required. LiteLLM's configuration loader passes false when this
+setting is omitted, and Apparitor rejects that configuration at startup. Direct construction
+defaults to true.
+
+The complete two-guardrail configuration is in `examples/litellm/config.yaml`. Keep MCP
+authorization last among sequential pre-MCP guardrails, after every trusted argument
+rewriter. It evaluates the effective `modified_arguments` when LiteLLM will apply them,
+otherwise the original `mcp_arguments`, and returns the payload unchanged. Rewriters must
+use LiteLLM's `modified_arguments` contract; replacing or mutating `mcp_arguments` itself
+can change the authorization input without changing execution. The constructor rejects parallel
+evaluation and `scan_raw_request`, which could authorize arguments different
+from the invocation. Do not permit subsequent hooks to rewrite arguments or routing, disable
+this guardrail through key/team metadata, or skip guardrails on these keys' execution paths.
+
+Identity comes from the authenticated `UserAPIKeyAuth`, with the same resolver and audit
+configuration as the model guardrail. The default mapper produces
+`{"type": "mcp_tool", "id": "<server-label>/<normalized-tool-name>"}`. LiteLLM supplies
+the resolved server's alias, server name or name as the label; this SDK hook does not expose
+its stable `server_id`. Keep labels unique and stable for the lifetime of their policies,
+and update policies deliberately when labels change. Missing labels and labels/tool names
+containing `/` fail closed. A custom mapper must preserve the server boundary, available in
+`request_context["mcp_server_label"]`. Arguments retain Apparitor's existing forwarding and
+redaction settings; use `redact_arguments=False` if a policy must inspect values, and treat
+those values as untrusted tool input.
+
+LiteLLM also sends a preliminary REST or virtual-tool request through the same event before
+resolving a server. That stage checks authenticated identity and makes no authorization
+decision; the subsequent server-bound hook is the execution gate. This contract is qualified
+against LiteLLM 1.104.2's MCP manager and proxy dispatcher, using a synthetic outbound executor
+and PDP. Keep the proxy logger and callback registration present on all gateway execution
+paths. A direct manager call without a proxy logger does not dispatch Apparitor.
+
+Each invocation is authorized separately; there is no atomic batch authorization. Deny,
+human-review and PDP-error outcomes stop execution. Authorization evidence does not prove
+execution succeeded; hosts must record execution outcomes separately. `during_mcp_call`
+runs concurrently with execution and is deliberately excluded from this adapter.
+
+Gateway discovery, tool search, resource reads and prompt retrieval are outside this
+execution hook. Use LiteLLM's server/key access controls for discovery and disable uncovered
+surfaces, or put Apparitor's FastMCP middleware on the upstream server for those boundaries.
+This hook also does not cover provider-hosted MCP calls, direct SDK calls or A2A/skill tools;
+keep their separate enforcement and route restrictions.
 
 ## Upstream and release work
 

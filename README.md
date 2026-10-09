@@ -26,7 +26,7 @@ agent action. You write no new policy and add no new enforcement layer.
    - **NVIDIA NeMo Guardrails**: authorization rail
    - **FastMCP**: MCP server middleware (subject taken from the validated OAuth token)
    - **A2A**: agent-to-agent executor
-   - **LiteLLM Proxy**: declaration and returned-tool-call guardrail (unreleased;
+   - **LiteLLM Proxy**: model-tool and MCP gateway execution guardrails (unreleased;
      [setup and boundaries](docs/litellm.md))
 
 2. **Decide with the Policy-as-Code engine you already trust.** One integration speaks the
@@ -198,9 +198,9 @@ handler = DefaultRequestHandler(agent_executor=guarded, task_store=..., agent_ca
 ```
 
 **LiteLLM Proxy guardrail** (unreleased; `pip install -e ".[litellm]"` from this checkout).
-Checks offered tools and
-returned invocations using the proxy's authenticated key-owner identity. Configure both
-hooks with the [LiteLLM setup guide](docs/litellm.md).
+Checks offered tools and returned invocations using the proxy's authenticated key-owner
+identity. A dedicated MCP guardrail authorizes server-bound gateway calls before execution.
+Configure the corresponding hooks with the [LiteLLM setup guide](docs/litellm.md).
 
 **Inside LlamaFirewall** (`pip install "apparitor[llamafirewall]"`). Bind the scanner to the
 assistant role so it gates tool calls before they dispatch. Tool calls in OpenAI, Anthropic,
