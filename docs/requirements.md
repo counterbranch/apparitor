@@ -15,7 +15,8 @@ AuthZEN 1.0 PDP and returns `ALLOW` / `BLOCK` / `HUMAN_IN_THE_LOOP_REQUIRED`.
 caching, configuration, examples for OpenFGA / Cedar / OPA / a mock PDP (Cerbos and
 Amazon Verified Permissions also work and may be added), the NeMo Guardrails rail
 (`apparitor.nemo`), the FastMCP server middleware (`apparitor.fastmcp`), and the A2A
-executor (`apparitor.a2a`).
+executor (`apparitor.a2a`), LiteLLM Proxy guardrail (`apparitor.litellm`), and
+optional privacy-bounded evidence sink (`apparitor.audit`).
 
 **Out of scope** (documented, deferred): control-plane decision-log emission, OPA
 bundles, Microsoft Agent Governance rails, natural-language policy authoring.

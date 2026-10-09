@@ -292,9 +292,8 @@ async def test_ambient_contextvar_subject_is_ignored(make_config) -> None:
     guard = _guarded(delegate, pdp, make_config)
     client = _a2a_client(guard)
     async with guard:
-        with subject_scope(_ALICE):
-            with pytest.raises(Exception, match="not authorized"):
-                await _send(client)
+        with subject_scope(_ALICE), pytest.raises(Exception, match="not authorized"):
+            await _send(client)
     assert delegate.executed == 0
     assert pdp.requests == []
 
@@ -759,7 +758,9 @@ async def test_skip_verdict_refuses_at_gateway_boundary(make_config) -> None:
     guard = _guarded(delegate, pdp, make_config)
     client = _a2a_client(guard, _ContextBuilder(user=_Peer("planner-agent")))
     async with guard:
-        with patch.object(guard._engine, "evaluate_requests", AsyncMock(return_value=skip_result)):
-            with pytest.raises(Exception, match="not authorized"):
-                await _send(client)
+        with (
+            patch.object(guard._engine, "evaluate_requests", AsyncMock(return_value=skip_result)),
+            pytest.raises(Exception, match="not authorized"),
+        ):
+            await _send(client)
     assert delegate.executed == 0  # SKIP must not reach the delegate

@@ -42,10 +42,14 @@ Trusted Publishing needs two things configured once, outside the repository:
 
 - **PyPI** — add a publisher at <https://pypi.org/manage/account/publishing/> (a *pending*
   publisher if the project does not exist on PyPI yet). Project `apparitor`, owner
-  `jhawlwut`, repository `apparitor`, workflow `release.yml`, environment `pypi`. These
+  `counterbranch`, repository `apparitor`, workflow `release.yml`, environment `pypi`. These
   fields must match the workflow exactly, or the `publish` job fails the OIDC exchange.
 - **GitHub** — a `pypi` environment (Settings → Environments), ideally restricted to `v*`
   tags so only tagged runs can publish.
+
+After transferring the repository, verify the PyPI publisher owner is `counterbranch`
+and the GitHub `pypi` environment still has the intended tag restriction before
+a release. Repository redirects do not update PyPI publisher identities.
 
 ## SBOM and immutable releases
 

@@ -29,7 +29,27 @@ from .adapters import (
     ToolCallAdapter,
     detect_adapter,
 )
+from .audit import (
+    AuditEvidence,
+    AuditMetadata,
+    AuditSink,
+    JsonLinesAuditSink,
+    NoopAuditSink,
+    argument_fingerprint,
+    audit_metadata_scope,
+    make_collection_gap_evidence,
+    summarize_evidence,
+    with_execution_outcome,
+)
 from .backends import DecisionBackend, OPABackend, build_backend
+from .collector import (
+    AuditTransport,
+    CollectorStatus,
+    DeliveryEvent,
+    DeliveryResult,
+    FlushResult,
+    LocalAuditCollector,
+)
 from .config import Backend, OnError, ScannerConfig
 from .decision import Verdict, VerdictResult, VerdictStatus
 from .engine import AuthorizationEngine, ReviewPredicate
@@ -79,6 +99,7 @@ if TYPE_CHECKING:
     from .a2a import A2AAuthorizationExecutor
     from .cedar import CedarBackend
     from .fastmcp import FastMCPAuthorizationMiddleware
+    from .litellm import LiteLLMAuthorizationGuardrail
     from .nemo import NeMoAuthorizationRails
     from .scanner import AuthZENScanner
 
@@ -89,6 +110,24 @@ __all__ = [  # noqa: RUF022 - grouped by concern, not alphabetised, for readabil
     "NeMoAuthorizationRails",
     "FastMCPAuthorizationMiddleware",
     "A2AAuthorizationExecutor",
+    "LiteLLMAuthorizationGuardrail",
+    # evidence (no host SDK dependency)
+    "AuditEvidence",
+    "AuditMetadata",
+    "AuditSink",
+    "JsonLinesAuditSink",
+    "NoopAuditSink",
+    "audit_metadata_scope",
+    "argument_fingerprint",
+    "make_collection_gap_evidence",
+    "LocalAuditCollector",
+    "AuditTransport",
+    "CollectorStatus",
+    "DeliveryEvent",
+    "DeliveryResult",
+    "FlushResult",
+    "summarize_evidence",
+    "with_execution_outcome",
     # config
     "ScannerConfig",
     "OnError",
@@ -160,6 +199,7 @@ _LAZY_EXPORTS = {
     "NeMoAuthorizationRails": "nemo",
     "FastMCPAuthorizationMiddleware": "fastmcp",
     "A2AAuthorizationExecutor": "a2a",
+    "LiteLLMAuthorizationGuardrail": "litellm",
 }
 
 

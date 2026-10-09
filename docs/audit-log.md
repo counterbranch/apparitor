@@ -223,21 +223,20 @@ may change without notice.
 | `apparitor: no authenticated subject for MCP request; refusing (…)` | WARNING | FastMCP: no token, no injected subject, and `allow_static_subject` not set; call refused |
 | `apparitor: no authenticated subject for A2A invocation; refusing (…)` | WARNING | A2A: no authenticated peer identity, no injected subject, and `allow_static_subject` not set; call refused |
 
-## Regulatory mapping (EU)
+## Regulatory context (EU)
 
-The schema is designed so the operator's sink can satisfy the EU obligations that most
-commonly attach to agent authorization records. apparitor provides the *recording
-capability*; retention, residency, and access control are properties of the sink you
-route the `apparitor` logger to. Confirm applicability with your compliance function. This
-section maps the schema, it is not legal advice.
+The schema can contribute evidence about apparitor's authorization function. Whether EU
+obligations apply depends on the complete system, its intended use and the operator's role.
+Retention, integrity, residency and access control are properties of the sink. This mapping
+is not a conformity assessment or legal advice.
 
 | Obligation | How the schema relates |
 | --- | --- |
-| **AI Act (Reg. (EU) 2024/1689) Art. 12, record-keeping.** High-risk AI systems must technically allow automatic recording of events enabling traceability of the system's functioning. | C1 is that record for the authorization function: per-decision outcome, every principal involved, the resource acted on, and a per-call fingerprint. Set `correlation_id` on every request so decisions chain to sessions/tasks. For regulated deployments treat it as required, not optional. |
-| **AI Act Arts. 19 / 26(6), log retention.** Providers and deployers of high-risk systems keep automatically generated logs at least **six months** (longer where other law requires). | Retention happens at the sink, not in apparitor (persistence is deliberately out of scope pre-`v0.1`). Route the logger to a sink with a retention policy meeting your role's obligation. |
+| **AI Act (Reg. (EU) 2024/1689) Art. 12, record-keeping.** A provider must design an applicable high-risk AI system with logging capabilities that enable appropriate traceability. | C1 can contribute evidence for apparitor's authorization function. It is not the complete high-risk-system log and the Act does not require every C1 field. Applicability depends on the complete system and intended use. |
+| **AI Act Arts. 19 / 26(6), log retention.** Providers and deployers have separate duties for automatically generated logs under their control, normally at least **six months**. | Retention happens at the sink, not in apparitor. Determine the responsible role, applicable start date and any longer period required by Union or national law. |
 | **AI Act Art. 14, human oversight.** | `verdict=human_review` records that a decision was escalated to a human. Who reviewed it and the outcome happen outside apparitor. Your review workflow must produce its own record and can join on `correlation` / `fingerprints`. |
-| **GDPR (Reg. (EU) 2016/679), personal data in logs.** | `subjects=` ids and `denied_legs=` entries are personal data when they identify people (emails). You need a lawful basis (security/audit logging is commonly Art. 6(1)(f)); minimization is designed in (no raw arguments, no tokens, generic wire reasons); prefer pseudonymous subject ids from your IdP where policy allows. Fingerprints are **pseudonymized, not anonymous**: the digest is linkable to the request tuple by anyone who can reconstruct it. |
-| **GDPR Arts. 5(1)(e), 17, storage limitation and erasure.** | Audit retention and erasure requests are in tension; Art. 17(3)(b)/(e) exemptions (legal obligation, legal claims) typically cover security audit trails for their retention window. Pseudonymous subject ids make this materially easier. Decide before go-live, not at the first request. |
+| **GDPR (Reg. (EU) 2016/679), personal data in logs.** | `subjects=` ids and `denied_legs=` entries are personal data when they identify people. Establish the applicable lawful basis and purpose; prefer tenant-scoped pseudonymous subject ids where policy allows. Fingerprints are **pseudonymous, not anonymous** when someone can reconstruct the request tuple. |
+| **GDPR Arts. 5(1)(e), 17, storage limitation and erasure.** | Define retention and erasure handling against the actual purposes and legal duties. Whether an Article 17(3) exception applies is deployment-specific. Pseudonymous subject references reduce exposure but remain personal data when re-identification is reasonably possible. |
 | **GDPR Ch. V / data sovereignty.** | Routing the `apparitor` logger to a sink outside the EU/EEA is a personal-data transfer. If residency is a requirement, the log pipeline (not just the PDP) must stay in-region. |
 | **NIS2 (Dir. (EU) 2022/2555) / DORA (Reg. (EU) 2022/2554).** | The decision log feeds detection and incident reconstruction (denied legs name which principal was stopped, fail-closed errors are visible at WARNING/ERROR). Integrity protection (append-only storage, tamper evidence) is a sink property; these lines carry no signatures. |
 
@@ -247,6 +246,10 @@ names** inside the fingerprint (see above). Some obligations require reconstruct
 was attempted, not just *that* it was attempted, by whom, on which resource. Those
 deployments must either set `redact_arguments=False` (weigh the GDPR minimization cost) or
 keep input records in an adjacent system joined via `correlation`.
+
+The high-risk application dates changed after the Act was originally published. See the
+current role, scope and timeline notes in [eu-ai-act.md](eu-ai-act.md), and use
+[compliance-evidence.md](compliance-evidence.md) for a privacy-bounded JSON evidence option.
 
 ## Stability policy
 
@@ -260,6 +263,9 @@ semantic changes to existing tokens are breaking and require:
 `tests/unit/test_log_contract.py` pins the documented grammar; a failure there means a
 breaking change is in flight.
 
-**Out of scope (tracked, deferred):** structured log persistence, cross-session
-aggregation, retention, and compliance export are post-`v0.1` work items. See
-[ROADMAP.md](../ROADMAP.md).
+The unreleased JSON evidence path adds durable local persistence through
+[`LocalAuditCollector`](collector.md) and tenant-separated ingestion and queries through
+the [Observe reference](observe.md). It does not change the frozen C1/C2/C3 grammar.
+
+**Out of scope (tracked, deferred):** operated deployment, retention and backups,
+tamper-evident storage, and statutory compliance exports. See [ROADMAP.md](../ROADMAP.md).
