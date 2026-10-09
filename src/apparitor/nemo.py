@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     import httpx
     from nemoguardrails import LLMRails
 
+    from .audit import AuditSink
     from .mapping import ToolCallMapper
     from .metrics import MetricsSink
 
@@ -135,6 +136,8 @@ class NeMoAuthorizationRails:
         http_client: httpx.AsyncClient | None = None,
         review_predicate: ReviewPredicate | None = None,
         metrics: MetricsSink | None = None,
+        audit_sink: AuditSink | None = None,
+        audit_fingerprint_key: bytes | None = None,
         action_name: str = "authorize_tool_calls",
     ) -> None:
         self._config = resolve_config(pdp_url, config)
@@ -144,6 +147,9 @@ class NeMoAuthorizationRails:
             mapper=mapper,
             review_predicate=review_predicate,
             metrics=metrics,
+            audit_sink=audit_sink,
+            audit_fingerprint_key=audit_fingerprint_key,
+            audit_integration="nemo",
         )
         self.action_name = action_name
         self._action = self._build_action()

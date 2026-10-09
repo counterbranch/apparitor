@@ -7,10 +7,22 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- LiteLLM Proxy custom guardrail using authenticated key-owner identity and fail-closed
+  checks for offered tools and returned tool calls. Streaming requests are refused.
+- Optional bounded JSONL authorization evidence, separate host-observed execution
+  outcomes and operational summaries; the existing text log grammar is unchanged.
+- Trace and identity provenance, structured reason codes, keyed argument fingerprints,
+  and collection-gap observations. Durable SQLite outbox with bounded retries and receipts.
+- Local Observe reference with tenant-bound ingestion, search, timelines, operational
+  alerts and a dashboard; an in-process delivery demo exercises lost acknowledgements.
+- Conventional API example with explicit trusted identity resolution and protected reads.
 - `RELEASING.md` runbook, and a release-pipeline guard that fails a tagged build when the
   pushed tag does not match `__version__` (`.github/workflows/release.yml`).
 
 ### Changed
+- Repository and publisher documentation uses `counterbranch/apparitor` after the transfer.
+- Cedar extra targets the locally tested 4.12 line; EU and state-law evidence mappings
+  distinguish current law, proposed measures and evidence not collected by this library.
 - Install instructions now point at PyPI (`pip install apparitor`) now that the `0.1.x`
   line is published, replacing the previous install-from-source guidance.
 - **NeMo Guardrails rail migrated to NeMo's `RailOutcome` contract (breaking; requires

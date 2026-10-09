@@ -39,6 +39,7 @@ except ImportError as exc:  # pragma: no cover
 if TYPE_CHECKING:
     import httpx
 
+    from .audit import AuditSink
     from .mapping import ToolCallMapper
     from .metrics import MetricsSink
 
@@ -79,6 +80,8 @@ class AuthZENScanner(Scanner):  # type: ignore[misc]  # LlamaFirewall ships no t
         http_client: httpx.AsyncClient | None = None,
         review_predicate: ReviewPredicate | None = None,
         metrics: MetricsSink | None = None,
+        audit_sink: AuditSink | None = None,
+        audit_fingerprint_key: bytes | None = None,
         scanner_name: str = "AuthZENAuthorizationScanner",
         block_threshold: float = 1.0,
     ) -> None:
@@ -90,6 +93,9 @@ class AuthZENScanner(Scanner):  # type: ignore[misc]  # LlamaFirewall ships no t
             mapper=mapper,
             review_predicate=review_predicate,
             metrics=metrics,
+            audit_sink=audit_sink,
+            audit_fingerprint_key=audit_fingerprint_key,
+            audit_integration="scanner",
         )
 
     @property

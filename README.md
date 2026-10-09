@@ -1,11 +1,11 @@
 # apparitor
 
-[![CI](https://github.com/jhawlwut/apparitor/actions/workflows/ci.yml/badge.svg)](https://github.com/jhawlwut/apparitor/actions/workflows/ci.yml)
-[![pip-audit](https://github.com/jhawlwut/apparitor/actions/workflows/pip-audit.yml/badge.svg)](https://github.com/jhawlwut/apparitor/actions/workflows/pip-audit.yml)
-[![Coverage](https://img.shields.io/badge/core%20coverage-%E2%89%A590%25-brightgreen.svg)](https://github.com/jhawlwut/apparitor/actions/workflows/ci.yml)
+[![CI](https://github.com/counterbranch/apparitor/actions/workflows/ci.yml/badge.svg)](https://github.com/counterbranch/apparitor/actions/workflows/ci.yml)
+[![pip-audit](https://github.com/counterbranch/apparitor/actions/workflows/pip-audit.yml/badge.svg)](https://github.com/counterbranch/apparitor/actions/workflows/pip-audit.yml)
+[![Coverage](https://img.shields.io/badge/core%20coverage-%E2%89%A590%25-brightgreen.svg)](https://github.com/counterbranch/apparitor/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
-[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/jhawlwut/apparitor?utm_source=oss&utm_medium=github&utm_campaign=jhawlwut%2Fapparitor&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
+[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/counterbranch/apparitor?utm_source=oss&utm_medium=github&utm_campaign=counterbranch%2Fapparitor&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
 
 **Your agents route around the authorization you already run.** apparitor brings them
 back under it. Every agent action (an LLM tool call, an MCP request, an agent-to-agent
@@ -26,6 +26,8 @@ agent action. You write no new policy and add no new enforcement layer.
    - **NVIDIA NeMo Guardrails**: authorization rail
    - **FastMCP**: MCP server middleware (subject taken from the validated OAuth token)
    - **A2A**: agent-to-agent executor
+   - **LiteLLM Proxy**: model-tool and MCP gateway execution guardrails (unreleased;
+     [setup and boundaries](docs/litellm.md))
 
 2. **Decide with the Policy-as-Code engine you already trust.** One integration speaks the
    **AuthZEN 1.0** interop standard, so the decision comes from your engine with no policy
@@ -34,8 +36,8 @@ agent action. You write no new policy and add no new enforcement layer.
    in-process backends. A direct OpenFGA backend and managed Amazon Verified Permissions
    are next.
 
-One engine returns one fail-closed verdict (`allow`, `block`, or `human-review`) at all
-four enforcement points. It answers the question content scanners skip: is this agent
+One engine returns one fail-closed verdict (`allow`, `block`, or `human-review`) through
+each adapter. It answers the question content scanners skip: is this agent
 allowed to do this?
 
 ## Get started
@@ -120,7 +122,7 @@ to handle:
 And you write no new policy: it stays in the engine your org already authors policy in,
 audited where the rest of your authorization lives.
 
-**Four enforcement points, one engine.** The check runs wherever your stack lets you
+**One engine across enforcement points.** The check runs wherever your stack lets you
 intercept the action: inside an agentic firewall (as a
 [LlamaFirewall](https://github.com/meta-llama/PurpleLlama/tree/main/LlamaFirewall)
 scanner or a [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) rail), at the
@@ -134,8 +136,8 @@ standard, so the same wiring reaches the engines you already author policy in:
 Rego**, with no policy rewrite. OPA and Cedar also have native backends that skip the
 AuthZEN hop.
 
-> **Status: `0.1.1`, beta.** **Shipping today:** all four enforcement points above and
-> the AuthZEN evaluation pipeline, working end-to-end against any AuthZEN 1.0 PDP (OpenFGA,
+> **Status: `0.1.1`, beta.** **Shipping today:** the LlamaFirewall, NeMo, FastMCP and A2A
+> adapters and the AuthZEN evaluation pipeline, working end-to-end against any AuthZEN 1.0 PDP (OpenFGA,
 > Cedar, OPA, Cerbos, Topaz) plus native OPA and in-process Cedar backends, with ≥90% test
 > coverage (CI-enforced) on the adapter-free core (see [`CHANGELOG`](CHANGELOG.md)).
 > Fail-closed on every error path, subject isolation, and an SSRF-guarded transport are
@@ -194,6 +196,11 @@ guarded = A2AAuthorizationExecutor(
 )
 handler = DefaultRequestHandler(agent_executor=guarded, task_store=..., agent_card=...)
 ```
+
+**LiteLLM Proxy guardrail** (unreleased; `pip install -e ".[litellm]"` from this checkout).
+Checks offered tools and returned invocations using the proxy's authenticated key-owner
+identity. A dedicated MCP guardrail authorizes server-bound gateway calls before execution.
+Configure the corresponding hooks with the [LiteLLM setup guide](docs/litellm.md).
 
 **Inside LlamaFirewall** (`pip install "apparitor[llamafirewall]"`). Bind the scanner to the
 assistant role so it gates tool calls before they dispatch. Tool calls in OpenAI, Anthropic,
@@ -285,6 +292,14 @@ parsing every contract line, and a Prometheus scrape — see
 [`examples/observability/`](examples/observability/). See [docs/audit-log.md](docs/audit-log.md)
 and [docs/requirements.md](docs/requirements.md) (§3.10).
 
+The unreleased Observe additions provide a typed `audit_sink`, trusted tenant/trace/identity
+metadata, separate execution outcomes and optional keyed argument fingerprints. A durable
+local collector forwards evidence to the reference ingestion service, which offers search,
+timelines, operational alerts and a dashboard. Run the [local pipeline demo](docs/observe-pipeline.md)
+to exercise restart recovery and delivery after a lost acknowledgement. Hosts supply opaque
+identities and policy provenance; evidence supports investigation and compliance work but
+does not establish legal compliance.
+
 ## What apparitor connects
 
 **Enforcement points** (the agent-side hooks apparitor plugs into):
@@ -295,6 +310,7 @@ and [docs/requirements.md](docs/requirements.md) (§3.10).
 | [**NeMo Guardrails**](https://github.com/NVIDIA/NeMo-Guardrails) | NVIDIA | shipping (`NeMoAuthorizationRails`) |
 | [**FastMCP**](https://github.com/PrefectHQ/fastmcp) server middleware | Prefect | shipping (`FastMCPAuthorizationMiddleware`) |
 | [**A2A**](https://a2a-protocol.org/) agent executor | Linux Foundation | shipping (`A2AAuthorizationExecutor`) |
+| [**LiteLLM Proxy**](https://docs.litellm.ai/docs/proxy/guardrails/custom_guardrail) | BerriAI | unreleased (`LiteLLMAuthorizationGuardrail`); [setup and boundaries](docs/litellm.md) |
 
 **Policy engines** (where the authorization decision is made). apparitor reaches these over
 AuthZEN; OPA and Cedar also have native backends that skip the AuthZEN hop, selected by
@@ -314,7 +330,13 @@ config (`backend="opa"` / `backend="cedar"`):
 - [Technical requirements & design decisions](docs/requirements.md)
 - [Architecture](docs/architecture.md)
 - [Setup: connecting to a policy engine](docs/setup.md)
-- [EU AI Act / CADA compliance reference](docs/eu-ai-act.md)
+- [EU AI Act authorization evidence reference](docs/eu-ai-act.md)
+- [Structured compliance evidence and state-law status](docs/compliance-evidence.md)
+- [LiteLLM Proxy setup](docs/litellm.md)
+- [Conventional API authorization](docs/api.md)
+- [Observe events and trusted metadata](docs/observe-events.md)
+- [Durable local collector](docs/collector.md)
+- [Observe reference service and dashboard](docs/observe.md)
 - [Roadmap](ROADMAP.md)
 - [Contributing](CONTRIBUTING.md) · [Releasing](RELEASING.md) · [Security policy](SECURITY.md) · [Changelog](CHANGELOG.md)
 

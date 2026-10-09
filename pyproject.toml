@@ -58,7 +58,7 @@ llamafirewall = ["llamafirewall>=0.0.1,<2"]
 # Apache-2.0 Cedar engine (Rust); its version tracks the Cedar major.minor it embeds. Optional
 # so the core stays standalone — importing `apparitor.cedar` without it raises
 # MissingDependencyError. Bump deliberately in lockstep with the Cedar engine.
-cedar = ["cedarpy>=4.8,<4.9"]
+cedar = ["cedarpy>=4.12,<4.13"]
 # NeMo Guardrails (NVIDIA) rail adapter (apparitor.nemo). The second agentic-firewall
 # integration alongside the LlamaFirewall scanner. Optional so the core stays standalone —
 # importing `apparitor.nemo` without it raises MissingDependencyError. NeMo is pre-1.0; the
@@ -83,6 +83,9 @@ fastmcp = ["fastmcp>=2.14,!=3.0.*,<5"]
 # SDK's own [http-server] extra, which the `a2a` CI job installs for the end-to-end harness.
 # Floor 1.1 = the verified proto-first 1.x API; bump deliberately.
 a2a = ["a2a-sdk>=1.1,<2"]
+# Proxy custom-guardrail contract verified against the stable 1.104.2 release.
+# Keep this line narrow; new LiteLLM minors need explicit hook compatibility checks.
+litellm = ["litellm>=1.104.2,<1.105"]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
@@ -102,11 +105,11 @@ integration = ["testcontainers>=4"]
 sbom = ["cyclonedx-bom==7.3.1"]
 
 [project.urls]
-Homepage = "https://github.com/jhawlwut/apparitor"
-Repository = "https://github.com/jhawlwut/apparitor"
-Issues = "https://github.com/jhawlwut/apparitor/issues"
-Documentation = "https://github.com/jhawlwut/apparitor/tree/main/docs"
-Changelog = "https://github.com/jhawlwut/apparitor/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/counterbranch/apparitor"
+Repository = "https://github.com/counterbranch/apparitor"
+Issues = "https://github.com/counterbranch/apparitor/issues"
+Documentation = "https://github.com/counterbranch/apparitor/tree/main/docs"
+Changelog = "https://github.com/counterbranch/apparitor/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "src/apparitor/__init__.py"
@@ -155,7 +158,7 @@ plugins = ["pydantic.mypy"]
 # LlamaFirewall, cedarpy and nemoguardrails ship no type stubs; fastmcp/mcp ship types but
 # may be absent in the lint environment.
 [[tool.mypy.overrides]]
-module = ["llamafirewall.*", "cedarpy.*", "nemoguardrails.*", "fastmcp.*", "mcp.*", "a2a.*"]
+module = ["llamafirewall.*", "cedarpy.*", "nemoguardrails.*", "fastmcp.*", "mcp.*", "a2a.*", "litellm.*"]
 ignore_missing_imports = true
 
 # apparitor.fastmcp subclasses fastmcp's Middleware and apparitor.a2a subclasses the A2A
@@ -163,12 +166,13 @@ ignore_missing_imports = true
 # (their CI jobs, local dev) — so the `type: ignore[misc]` on each class is required in the
 # first case and unused in the second.
 [[tool.mypy.overrides]]
-module = ["apparitor.fastmcp", "apparitor.a2a"]
+module = ["apparitor.fastmcp", "apparitor.a2a", "apparitor.litellm"]
 warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 testpaths = ["tests"]
+pythonpath = ["."]
 # Coverage gate is enforced (90% line+branch). scanner.py is omitted from the default
 # run (it needs LlamaFirewall) and is covered by the `scanner` CI job — see [tool.coverage.run].
 addopts = "-m 'not integration' --strict-markers --cov=apparitor --cov-branch --cov-fail-under=90"
@@ -185,12 +189,13 @@ source = ["apparitor"]
 # (fastmcp) and a2a.py (a2a-sdk) each depend on an optional extra and are covered by their
 # own CI jobs (`scanner`, `cedar`, `nemo`, `fastmcp`, `a2a`) that install the extra — not
 # the default unit run, which must import the package without those deps.
-omit = ["*/scanner.py", "*/cedar.py", "*/nemo.py", "*/fastmcp.py", "*/a2a.py"]
+omit = ["*/scanner.py", "*/cedar.py", "*/nemo.py", "*/fastmcp.py", "*/a2a.py", "*/litellm.py"]
 
 [tool.coverage.report]
 exclude_lines = [
   "pragma: no cover",
   "raise NotImplementedError",
   "if TYPE_CHECKING:",
-  "\\.\\.\\.",
+  # Protocol stub bodies only; tuple type annotations must not exclude real code.
+  "^\\s*(?:.*:\\s*)?\\.\\.\\.\\s*(?:#.*)?$",
 ]

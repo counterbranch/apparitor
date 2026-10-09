@@ -81,7 +81,6 @@ from .adapters import NormalizedToolCall
 from .decision import (
     VerdictResult,
     is_allowed_gateway,
-    record_pre_engine_refusal,
     refusal_message,
     validate_gateway_subject_config,
 )
@@ -113,6 +112,7 @@ if TYPE_CHECKING:
     from fastmcp.server.middleware import CallNext, MiddlewareContext
     from fastmcp.tools.tool import ToolResult
 
+    from .audit import AuditSink
     from .config import ScannerConfig
     from .mapping import ToolCallMapper
     from .metrics import MetricsSink
@@ -154,6 +154,8 @@ class FastMCPAuthorizationMiddleware(Middleware):  # type: ignore[misc]  # fastm
         http_client: httpx.AsyncClient | None = None,
         review_predicate: ReviewPredicate | None = None,
         metrics: MetricsSink | None = None,
+        audit_sink: AuditSink | None = None,
+        audit_fingerprint_key: bytes | None = None,
     ) -> None:
         super().__init__()
         # Resolve config first so the workload guards can check config.subject_type.
@@ -180,6 +182,9 @@ class FastMCPAuthorizationMiddleware(Middleware):  # type: ignore[misc]  # fastm
             mapper=mapper or MCPResourceMapper(config),
             review_predicate=review_predicate,
             metrics=metrics,
+            audit_sink=audit_sink,
+            audit_fingerprint_key=audit_fingerprint_key,
+            audit_integration="fastmcp",
         )
         # One line an operator can find when diagnosing "why is X denied after upgrade".
         logger.info(
@@ -231,7 +236,7 @@ class FastMCPAuthorizationMiddleware(Middleware):  # type: ignore[misc]  # fastm
             return [tool for tool, name in zip(tools, names, strict=True) if name in visible]
         except Exception:
             logger.exception("apparitor: listing filter error (hiding all tools)")
-            record_pre_engine_refusal(self._engine.metrics)
+            self._engine.record_refusal()
             return []
 
     async def on_read_resource(
@@ -285,14 +290,14 @@ class FastMCPAuthorizationMiddleware(Middleware):  # type: ignore[misc]  # fastm
             # Defense in depth: an adapter-level fault must refuse, never execute. The
             # generic message is deliberate — exception text must not reach the client.
             logger.exception("apparitor: FastMCP authorization middleware error (refusing)")
-            record_pre_engine_refusal(self._engine.metrics)
+            self._engine.record_refusal()
             raise error_cls(refusal_message(noun, None)) from None
         if verdict is not None and is_allowed_gateway(verdict):
             return await call_next(context)
         if verdict is None:
             # No resolvable subject: the engine never ran, so this refusal is invisible to
             # its metrics unless we count it here (else an all-misconfigured fleet logs zero).
-            record_pre_engine_refusal(self._engine.metrics)
+            self._engine.record_refusal()
         raise error_cls(refusal_message(noun, verdict))
 
     async def _authorize(
@@ -331,7 +336,7 @@ class FastMCPAuthorizationMiddleware(Middleware):  # type: ignore[misc]  # fastm
             return set()
         ctx = self._request_context(context)
         if ctx is None:
-            record_pre_engine_refusal(self._engine.metrics)
+            self._engine.record_refusal()
             return set()
         verdicts = await self._engine.evaluate_each(
             [NormalizedToolCall(name=name) for name in names], request_context=ctx

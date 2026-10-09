@@ -29,6 +29,16 @@ pip install "apparitor[cedar]"           # in-process Cedar backend (cedarpy, no
 `[llamafirewall]` pulls LlamaFirewall's ML dependencies (torch, PromptGuard); the bare
 install and all other extras work without it.
 
+The LiteLLM Proxy guardrail is unreleased. Install its `[litellm]` extra from this
+checkout until a release includes it:
+
+```bash
+pip install -e ".[litellm]"
+```
+
+Running the HTTP proxy also requires LiteLLM's own `proxy` extra. See
+[litellm.md](litellm.md) for both required hooks, trusted identity and supported tool boundaries.
+
 ## Authentication & TLS (bring-your-own httpx client)
 
 For bearer tokens, mTLS, custom CA roots, or proxies, pass a pre-configured

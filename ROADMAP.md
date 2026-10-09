@@ -17,8 +17,14 @@ Status legend: ✅ done · 🔜 next · 📋 planned.
   conformance, and the internal adversarial security review. Published via OIDC trusted
   publishing — `pip install apparitor`. The documentation site and the Amazon Verified
   Permissions cloud example are still outstanding.
-- **Next:** a direct **OpenFGA** backend (its own Check API) and a managed **Amazon Verified
-  Permissions** backend (boto3), both on the existing pluggable decision-backend seam.
+- **Prepared locally, unreleased:** LiteLLM Proxy custom guardrail, privacy-bounded JSONL
+  decision/execution evidence and operational summaries, current EU/state-law mappings,
+  a durable local outbox, an Observe ingestion/search/timeline/alerts/dashboard reference,
+  and a conventional FastAPI authorization example. Cedar compatibility moves to the
+  tested 4.12 line. LiteLLM streaming is refused; see [integration boundaries](docs/litellm.md).
+- **Next candidates:** a direct **OpenFGA** backend (its own Check API), framework-specific
+  tool invocation hooks, and delegation/revocation hardening. A managed **Amazon Verified
+  Permissions** backend remains deferred; AWS is not needed to run or qualify Apparitor.
 - **Later (adoption-gated):** an independent third-party security review, plus the deferred
   items under [Out of scope](#out-of-scope-tracked-deferred).
 
@@ -86,7 +92,8 @@ The milestones below give the detail.
   field-by-field mapping of the decision log to Article 12 categories, the Article 14
   human-oversight mechanism (`HUMAN_IN_THE_LOOP_REQUIRED`), and the deployer obligations
   (tamper-evidence, 6-month retention) that are infrastructure concerns outside this
-  library's scope. High-risk obligations apply from **2 August 2026**.
+  library's scope. The principal high-risk application dates are now **2 December 2027** (Annex III)
+  and **2 August 2028** (Annex I), following the AI Omnibus.
 
 **Acceptance:** the `0.1.x` line published to PyPI, green release pipeline, no open P0/P1
 findings in the documented internal review. (Met: `0.1.1` is on PyPI via the
@@ -116,11 +123,11 @@ backends called out under [At a glance](#at-a-glance).
   authorized server-side before the tool executes, with the subject taken from the
   **validated** OAuth token (`sub`) rather than a host assertion (`apparitor.fastmcp`,
   optional `[fastmcp]` extra). Follow-ups, all shipped: ✅ list filtering via
-  `filter_listings` ([#32](https://github.com/jhawlwut/apparitor/issues/32)), ✅ workload
+  `filter_listings` ([#32](https://github.com/counterbranch/apparitor/issues/32)), ✅ workload
   (client-credentials) identities as a distinct `workload` subject type via
-  `allow_workload_subject` ([#33](https://github.com/jhawlwut/apparitor/issues/33)), ✅
+  `allow_workload_subject` ([#33](https://github.com/counterbranch/apparitor/issues/33)), ✅
   resource reads and prompts gated by default (actions `resource.read` / `prompt.get`,
-  per-hook opt-outs) ([#34](https://github.com/jhawlwut/apparitor/issues/34)).
+  per-hook opt-outs) ([#34](https://github.com/counterbranch/apparitor/issues/34)).
 - ✅ **A2A executor**, the first non-firewall, non-MCP surface: every agent-to-agent
   invocation is authorized before the wrapped `AgentExecutor` runs (`action =
   agent.invoke`, `resource = <agent>` or `<agent>/<skill>` via `skill_resolver`), with the
@@ -135,7 +142,7 @@ backends called out under [At a glance](#at-a-glance).
   end user's grant AND the agent's own permission boundary as one all-allow-or-block
   batch, at every mapper-gated call (scanner, rail, FastMCP tools/listing). The A2A
   executor and FastMCP resource/prompt paths are also covered via `boundary_subject`
-  (closes [#39](https://github.com/jhawlwut/apparitor/issues/39)).
+  (closes [#39](https://github.com/counterbranch/apparitor/issues/39)).
 - Keep the host-specific surface thin: only the adapter module may import a host SDK, so the
   core stays standalone.
 
@@ -154,7 +161,7 @@ backends called out under [At a glance](#at-a-glance).
 
 ## Out of scope (tracked, deferred)
 
-Intentionally excluded for now and tracked separately: control-plane decision-log emission,
+Intentionally excluded for now and tracked separately: operated control-plane ingestion,
 OPA bundle distribution, a Microsoft Agent Governance capability check, and natural-language
-policy authoring. Structured log persistence, cross-session aggregation, retention, and
-compliance export are post-`v0.1`.
+policy authoring. The local evidence/outbox/Observe reference prepares persistence and
+aggregation; managed deployment, retention and statutory compliance exports remain deferred.

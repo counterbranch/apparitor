@@ -13,9 +13,18 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from .adapters import NormalizedToolCall, detect_adapter
+from .audit import (
+    AuditSink,
+    CacheStatus,
+    EventKind,
+    argument_fingerprint,
+    current_audit_metadata,
+    make_audit_evidence,
+)
 from .backends import build_backend
 from .cache import DecisionCache, decision_cache_key
 from .config import ScannerConfig
@@ -68,7 +77,14 @@ class AuthorizationEngine:
         mapper: ToolCallMapper | None = None,
         review_predicate: ReviewPredicate | None = None,
         metrics: MetricsSink | None = None,
+        audit_sink: AuditSink | None = None,
+        audit_fingerprint_key: bytes | None = None,
+        audit_integration: str = "core",
     ) -> None:
+        if audit_fingerprint_key is not None and (
+            not isinstance(audit_fingerprint_key, bytes) or len(audit_fingerprint_key) < 32
+        ):
+            raise AuthZENConfigError("audit_fingerprint_key must contain at least 32 bytes")
         self._config = config
         self._client = client or build_backend(config)
         self._mapper = mapper or DefaultToolCallMapper(config)
@@ -76,6 +92,11 @@ class AuthorizationEngine:
         #: Decision-latency histogram + cache-hit counter. Defaults to an in-memory sink;
         #: pass ``NoopMetrics()`` to disable or your own sink to forward elsewhere.
         self.metrics: MetricsSink = metrics if metrics is not None else InMemoryMetrics()
+        self._audit_sink = audit_sink
+        self.audit_failures = 0
+        self.audit_fingerprint_failures = 0
+        self._audit_fingerprint_key = audit_fingerprint_key
+        self._audit_integration = audit_integration
         self._cache = (
             DecisionCache(
                 ttl_s=config.cache_ttl_s,
@@ -103,6 +124,11 @@ class AuthorizationEngine:
             return result
         return await self.evaluate_normalized(normalized, request_context)
 
+    @property
+    def audit_sink(self) -> AuditSink | None:
+        """The host-owned evidence sink, also available for execution observations."""
+        return self._audit_sink
+
     async def evaluate_normalized(
         self,
         calls: list[NormalizedToolCall] | None,
@@ -121,9 +147,16 @@ class AuthorizationEngine:
             return VerdictResult(Verdict.SKIP, _SKIP_REASON, VerdictStatus.SKIPPED)
 
         started = time.perf_counter()
-        result, requests = await self._decide(calls, request_context or {})
+        fingerprints = self._argument_fingerprints(calls)
+        result, requests, cache_status = await self._decide(calls, request_context or {})
         latency_s = time.perf_counter() - started
-        self._emit(result, requests, latency_s)
+        self._emit(
+            result,
+            requests,
+            latency_s,
+            cache_status=cache_status,
+            argument_fingerprints=fingerprints,
+        )
         return result
 
     async def evaluate_requests(self, requests: list[EvaluationRequest] | None) -> VerdictResult:
@@ -141,9 +174,9 @@ class AuthorizationEngine:
             return VerdictResult(Verdict.SKIP, _SKIP_REASON, VerdictStatus.SKIPPED)
 
         started = time.perf_counter()
-        result = await self._evaluate_guarded(requests)
+        result, cache_status = await self._evaluate_guarded(requests)
         latency_s = time.perf_counter() - started
-        self._emit(result, requests, latency_s)
+        self._emit(result, requests, latency_s, cache_status=cache_status)
         return result
 
     async def evaluate_with_boundary(
@@ -194,13 +227,20 @@ class AuthorizationEngine:
         if not calls:
             return []
         started = time.perf_counter()
-        results = await self._decide_each(calls, request_context or {})
+        fingerprints = [self._argument_fingerprints([call]) for call in calls]
+        results, request_counts = await self._decide_each(calls, request_context or {})
         latency_s = time.perf_counter() - started
-        self._emit_each(results, latency_s)
+        self._emit_each(results, latency_s, request_counts, fingerprints)
         return results
 
     def _emit(
-        self, result: VerdictResult, requests: list[EvaluationRequest], latency_s: float
+        self,
+        result: VerdictResult,
+        requests: list[EvaluationRequest],
+        latency_s: float,
+        *,
+        cache_status: CacheStatus = "unknown",
+        argument_fingerprints: tuple[str, ...] | None = None,
     ) -> None:
         """Record metrics and the structured decision log.
 
@@ -214,8 +254,95 @@ class AuthorizationEngine:
             )
             if requests:
                 self._log(result, requests, latency_s)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             logger.exception("apparitor: metrics/log emission failed (verdict unaffected)")
+        self._emit_audit(
+            result,
+            len(requests),
+            latency_s,
+            cache_status=cache_status,
+            argument_fingerprints=argument_fingerprints,
+        )
+
+    def _argument_fingerprints(self, calls: list[NormalizedToolCall]) -> tuple[str, ...] | None:
+        metadata = current_audit_metadata()
+        if self._audit_fingerprint_key is None or self._audit_sink is None or metadata is None:
+            return None
+        try:
+            # AuditEvidence bounds each reference array to 64. Keep the decision
+            # record when a larger aggregate cannot carry every exact fingerprint.
+            if len(calls) > 64:
+                raise ValueError("too many argument fingerprints")
+            return tuple(
+                argument_fingerprint(
+                    call,
+                    key=self._audit_fingerprint_key,
+                    tenant_ref=metadata.tenant_ref,
+                    max_bytes=self._config.max_argument_bytes,
+                )
+                for call in calls
+            )
+        except (TypeError, ValueError):
+            self.audit_fingerprint_failures += 1
+            logger.warning("apparitor: exact argument fingerprints unavailable")
+            return ()
+
+    def _emit_audit(
+        self,
+        result: VerdictResult,
+        request_count: int,
+        latency_s: float,
+        *,
+        event_kind: EventKind = "aggregate_decision",
+        cache_status: CacheStatus = "unknown",
+        argument_fingerprints: tuple[str, ...] | None = None,
+        reason_code: str | None = None,
+    ) -> None:
+        if self._audit_sink is None:
+            return
+        if (
+            result.status is VerdictStatus.ERROR
+            and request_count == 0
+            and event_kind not in ("cancelled", "boundary_refusal")
+        ):
+            event_kind = "mapping_failure"
+        try:
+            metadata = current_audit_metadata()
+            if metadata is not None:
+                metadata = replace(metadata, integration=self._audit_integration)
+            if reason_code is None:
+                if event_kind in ("mapping_failure", "boundary_refusal", "cancelled"):
+                    reason_code = event_kind
+                elif result.status is VerdictStatus.ERROR:
+                    reason_code = "evaluation_error"
+                else:
+                    reason_code = {
+                        Verdict.ALLOW: "authorized",
+                        Verdict.BLOCK: "policy_denied",
+                        Verdict.HUMAN_REVIEW: "oversight_required",
+                        Verdict.SKIP: "no_action",
+                    }[result.verdict]
+            record = make_audit_evidence(
+                event_kind=event_kind,
+                request_count=request_count,
+                evaluation_status=result.status.value,
+                verdict=result.verdict.value,
+                latency_ms=latency_s * 1000,
+                cache_status=cache_status,
+                error_code="evaluation_error" if result.status is VerdictStatus.ERROR else None,
+                metadata=metadata,
+                argument_fingerprints=argument_fingerprints,
+                reason_code=reason_code,
+            )
+            self._audit_sink.record(record)
+        except (Exception, asyncio.CancelledError):
+            self.audit_failures += 1
+            # Sink exceptions may contain storage credentials or identifiers.
+            logger.warning("apparitor: audit emission failed (verdict unaffected)")
+
+    def record_refusal(self, reason_code: str = "boundary_refused") -> None:
+        """Record a boundary refusal before a request can be mapped or evaluated."""
+        self._record_cancelled(event_kind="boundary_refusal", reason_code=reason_code)
 
     def _record_cache(self, *, hit: bool) -> None:
         """Record a cache outcome, isolated so a faulty sink can't alter the verdict.
@@ -225,10 +352,17 @@ class AuthorizationEngine:
         """
         try:
             self.metrics.record_cache(hit=hit)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             logger.exception("apparitor: cache metric emission failed (verdict unaffected)")
 
-    def _record_cancelled(self) -> None:
+    def _record_cancelled(
+        self,
+        request_count: int = 0,
+        *,
+        event_kind: EventKind = "cancelled",
+        cache_status: CacheStatus = "unknown",
+        reason_code: str | None = None,
+    ) -> None:
         """Record the block/error metric for a mid-evaluation cancellation, isolated.
 
         Must not raise — a faulty sink must never replace the original CancelledError with a
@@ -238,43 +372,54 @@ class AuthorizationEngine:
             self.metrics.record_decision(
                 verdict=Verdict.BLOCK.value, status=VerdictStatus.ERROR.value, latency_s=0.0
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             logger.exception("apparitor: cancellation metric emission failed")
+        self._emit_audit(
+            VerdictResult(Verdict.BLOCK, _DENY_REASON, VerdictStatus.ERROR),
+            request_count,
+            0.0,
+            event_kind=event_kind,
+            cache_status=cache_status,
+            reason_code=reason_code,
+        )
 
     async def _decide(
         self, tool_calls: list[NormalizedToolCall], ctx: Mapping[str, Any]
-    ) -> tuple[VerdictResult, list[EvaluationRequest]]:
+    ) -> tuple[VerdictResult, list[EvaluationRequest], CacheStatus]:
         try:
             requests = self._build_requests(tool_calls, ctx)
         except AuthZENConfigError as exc:
             # Our misconfiguration (e.g. no subject) — fail closed, loudly. The warning is
             # the operator's only signal: no request was built, so no decision log follows.
             logger.warning("apparitor: mapping failed, blocking (%s)", exc)
-            return VerdictResult(Verdict.BLOCK, _DENY_REASON, VerdictStatus.ERROR), []
+            return (
+                VerdictResult(Verdict.BLOCK, _DENY_REASON, VerdictStatus.ERROR),
+                [],
+                "unknown",
+            )
         except Exception as exc:
             # A buggy custom mapper must fail closed here exactly as it does on the
             # per-item path — the engine never raises, never allows on error.
-            return self._fault_verdict(exc), []
+            return self._fault_verdict(exc), [], "unknown"
 
         if not requests:  # every mapper abstained
-            return VerdictResult(Verdict.SKIP, _SKIP_REASON, VerdictStatus.SKIPPED), []
+            return VerdictResult(Verdict.SKIP, _SKIP_REASON, VerdictStatus.SKIPPED), [], "unknown"
 
-        return await self._evaluate_guarded(requests), requests
+        result, cache_status = await self._evaluate_guarded(requests)
+        return result, requests, cache_status
 
-    async def _evaluate_guarded(self, requests: list[EvaluationRequest]) -> VerdictResult:
+    async def _evaluate_guarded(
+        self, requests: list[EvaluationRequest]
+    ) -> tuple[VerdictResult, CacheStatus]:
         """Evaluate with the fail-closed error tables (never raises, never ALLOW on error)."""
         try:
             return await self._evaluate(requests)
         except asyncio.CancelledError:
-            # CancelledError is a BaseException, so the `except Exception` below would not
-            # catch it — a mid-PDP cancellation would produce no verdict at all, which is
-            # indistinguishable from ALLOW at the caller.  Record the fault metric so ops
-            # can observe the interruption, then re-raise: structured concurrency requires
-            # CancelledError to propagate (callers must treat an unfinished scan as denied).
-            self._record_cancelled()
+            # The single/batch path records its actual cache observation before propagating.
             raise
         except Exception as exc:
-            return self._fault_verdict(exc)
+            cache_status: CacheStatus = "not_applicable" if len(requests) > 1 else "unknown"
+            return self._fault_verdict(exc), cache_status
 
     def _fault_verdict(self, exc: Exception) -> VerdictResult:
         """The one fail-closed error table, shared by every evaluation path."""
@@ -293,7 +438,7 @@ class AuthorizationEngine:
 
     async def _decide_each(
         self, calls: list[NormalizedToolCall], ctx: Mapping[str, Any]
-    ) -> list[VerdictResult]:
+    ) -> tuple[list[VerdictResult], list[int]]:
         try:
             mapped = [_as_requests(self._mapper.map(call, ctx)) for call in calls]
         except Exception as exc:  # incl. AuthZENConfigError — a mapper fault blocks every item
@@ -303,7 +448,7 @@ class AuthorizationEngine:
                 failed = VerdictResult(Verdict.BLOCK, _DENY_REASON, VerdictStatus.ERROR)
             else:
                 failed = self._fault_verdict(exc)
-            return [failed] * len(calls)
+            return [failed] * len(calls), [0] * len(calls)
 
         # Abstained items (None or an EMPTY group — all([]) must never read as allow)
         # stay BLOCK so positions align and abstention can never reveal.
@@ -311,8 +456,9 @@ class AuthorizationEngine:
             VerdictResult(Verdict.BLOCK, "mapper abstained (fail closed)", VerdictStatus.ERROR)
         ] * len(calls)
         indexed = [(i, group) for i, group in enumerate(mapped) if group]
+        request_counts = [len(group) for group in mapped]
         if not indexed:
-            return results
+            return results, request_counts
 
         try:
             flat = [request for _, group in indexed for request in group]
@@ -330,13 +476,13 @@ class AuthorizationEngine:
                     leg = map_single(item.decision, wants_review=self._wants_review(item.context))
                     combined = escalate(combined, leg)
                 results[i] = VerdictResult(combined, _reason_for(combined))
-            return results
+            return results, request_counts
         except asyncio.CancelledError:
             # CancelledError is a BaseException; the `except Exception` below does not catch
             # it — without this clause a mid-batch cancellation would record no metric, making
             # the interruption invisible to ops.  Record the fault metric (same convention as
             # _evaluate_guarded), then re-raise: a cancelled scan is non-authorized.
-            self._record_cancelled()
+            self._record_cancelled(len(flat), cache_status="not_applicable")
             raise
         except Exception as exc:
             # Covers the PDP round trip AND per-item mapping (a raising review predicate
@@ -344,9 +490,15 @@ class AuthorizationEngine:
             verdict = self._fault_verdict(exc)
         for i, _ in indexed:
             results[i] = verdict
-        return results
+        return results, request_counts
 
-    def _emit_each(self, results: list[VerdictResult], latency_s: float) -> None:
+    def _emit_each(
+        self,
+        results: list[VerdictResult],
+        latency_s: float,
+        request_counts: list[int],
+        fingerprints: list[tuple[str, ...] | None],
+    ) -> None:
         """Best-effort metrics for per-item decisions; one counter per item, batch latency.
 
         Same isolation as :meth:`_emit` — observability can never alter a verdict.
@@ -361,8 +513,19 @@ class AuthorizationEngine:
                 [r.verdict.value for r in results],
                 latency_s * 1000,
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             logger.exception("apparitor: metrics/log emission failed (verdict unaffected)")
+        for result, request_count, item_fingerprints in zip(
+            results, request_counts, fingerprints, strict=True
+        ):
+            self._emit_audit(
+                result,
+                request_count,
+                latency_s,
+                event_kind="per_item_decision",
+                cache_status="not_applicable",
+                argument_fingerprints=item_fingerprints,
+            )
 
     def _build_requests(
         self, tool_calls: list[NormalizedToolCall], ctx: Mapping[str, Any]
@@ -372,26 +535,42 @@ class AuthorizationEngine:
             requests.extend(_as_requests(self._mapper.map(call, ctx)))
         return requests
 
-    async def _evaluate(self, requests: list[EvaluationRequest]) -> VerdictResult:
+    async def _evaluate(
+        self, requests: list[EvaluationRequest]
+    ) -> tuple[VerdictResult, CacheStatus]:
         if len(requests) == 1:
             return await self._evaluate_single(requests[0])
-        return await self._evaluate_batch(requests)
+        try:
+            return await self._evaluate_batch(requests), "not_applicable"
+        except asyncio.CancelledError:
+            self._record_cancelled(len(requests), cache_status="not_applicable")
+            raise
 
-    async def _evaluate_single(self, request: EvaluationRequest) -> VerdictResult:
+    async def _evaluate_single(
+        self, request: EvaluationRequest
+    ) -> tuple[VerdictResult, CacheStatus]:
         key = decision_cache_key(request) if self._cache is not None else None
+        cache_status: CacheStatus = "not_applicable" if self._cache is None else "unknown"
         if self._cache is not None and key is not None:
             hit = self._cache.get(key)
             self._record_cache(hit=bool(hit))
             if hit:
-                return VerdictResult(Verdict.ALLOW, f"{_ALLOW_REASON} (cached)")
+                return VerdictResult(Verdict.ALLOW, f"{_ALLOW_REASON} (cached)"), "hit"
+            cache_status = "miss"
 
-        response = await self._client.evaluate(request)
-        wants_review = self._wants_review(response.context)
-        verdict = map_single(response.decision, wants_review=wants_review)
+        try:
+            response = await self._client.evaluate(request)
+            wants_review = self._wants_review(response.context)
+            verdict = map_single(response.decision, wants_review=wants_review)
+        except asyncio.CancelledError:
+            self._record_cancelled(1, cache_status=cache_status)
+            raise
+        except Exception as exc:
+            return self._fault_verdict(exc), cache_status
 
         if verdict is Verdict.ALLOW and self._cache is not None and key is not None:
             self._cache.set_allow(key)  # reuse the digest computed above (hot path)
-        return VerdictResult(verdict, _reason_for(verdict))
+        return VerdictResult(verdict, _reason_for(verdict)), cache_status
 
     async def _evaluate_batch(self, requests: list[EvaluationRequest]) -> VerdictResult:
         response = await self._client.evaluate_batch(_to_batch(requests))
@@ -531,6 +710,9 @@ def build_engine(
     mapper: ToolCallMapper | None = None,
     review_predicate: ReviewPredicate | None = None,
     metrics: MetricsSink | None = None,
+    audit_sink: AuditSink | None = None,
+    audit_fingerprint_key: bytes | None = None,
+    audit_integration: str = "core",
 ) -> AuthorizationEngine:
     """Construct the backend and engine from a resolved config (one place, all adapters).
 
@@ -545,4 +727,7 @@ def build_engine(
         mapper=mapper,
         review_predicate=review_predicate,
         metrics=metrics,
+        audit_sink=audit_sink,
+        audit_fingerprint_key=audit_fingerprint_key,
+        audit_integration=audit_integration,
     )

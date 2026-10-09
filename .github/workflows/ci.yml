@@ -141,6 +141,21 @@ jobs:
       - name: Pytest (Cedar in-process backend, with cedarpy)
         run: pytest tests/unit/test_cedar_backend.py -p no:cacheprovider --no-cov
 
+  litellm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - run: uv pip install --system -e ".[dev,litellm]" "litellm[proxy]" -r examples/api/requirements.txt -r examples/observe/requirements.txt
+      - name: Verify LiteLLM guardrail imports
+        run: python -c "import fastapi; from litellm.proxy.utils import ProxyLogging; from apparitor import LiteLLMAuthorizationGuardrail, LiteLLMMCPAuthorizationGuardrail; import examples.observe.app"
+      - name: Pytest (LiteLLM guardrail and HTTP examples)
+        run: pytest tests/unit/test_litellm.py tests/unit/test_litellm_mcp.py tests/unit/test_api_example.py tests/unit/test_observe_plane.py tests/unit/test_observe_pipeline.py -p no:cacheprovider --no-cov
+
   # The NeMo Guardrails rail adapter's only hard dependency is nemoguardrails, so its
   # end-to-end test runs in a dedicated job that installs the [nemo] extra — keeping it out of
   # the default [dev] run, like the scanner and cedar jobs.

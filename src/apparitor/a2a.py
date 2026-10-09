@@ -87,7 +87,6 @@ from typing import TYPE_CHECKING, Any
 from .decision import (
     VerdictResult,
     is_allowed_gateway,
-    record_pre_engine_refusal,
     refusal_message,
     validate_gateway_subject_config,
 )
@@ -110,6 +109,7 @@ if TYPE_CHECKING:
     import httpx
     from a2a.server.events import EventQueue
 
+    from .audit import AuditSink
     from .config import ScannerConfig
     from .metrics import MetricsSink
 
@@ -147,6 +147,8 @@ class A2AAuthorizationExecutor(AgentExecutor):  # type: ignore[misc]  # a2a-sdk 
         http_client: httpx.AsyncClient | None = None,
         review_predicate: ReviewPredicate | None = None,
         metrics: MetricsSink | None = None,
+        audit_sink: AuditSink | None = None,
+        audit_fingerprint_key: bytes | None = None,
     ) -> None:
         # Resolve config first so the workload guards can check config.subject_type.
         config = resolve_config(pdp_url, config)
@@ -171,6 +173,9 @@ class A2AAuthorizationExecutor(AgentExecutor):  # type: ignore[misc]  # a2a-sdk 
             http_client=http_client,
             review_predicate=review_predicate,
             metrics=metrics,
+            audit_sink=audit_sink,
+            audit_fingerprint_key=audit_fingerprint_key,
+            audit_integration="a2a",
         )
         logger.info(
             "apparitor: A2A executor gating agent.invoke for %r%s",
@@ -193,7 +198,7 @@ class A2AAuthorizationExecutor(AgentExecutor):  # type: ignore[misc]  # a2a-sdk 
             # Defense in depth: an adapter-level fault must refuse, never execute. The
             # generic message is deliberate — exception text reaches the calling agent.
             logger.exception("apparitor: A2A authorization executor error (refusing)")
-            record_pre_engine_refusal(self._engine.metrics)
+            self._engine.record_refusal()
             raise InvalidRequestError(message=refusal_message("agent invocation", None)) from None
         if verdict is not None and is_allowed_gateway(verdict):
             await self._delegate.execute(context, event_queue)
@@ -201,7 +206,7 @@ class A2AAuthorizationExecutor(AgentExecutor):  # type: ignore[misc]  # a2a-sdk 
         if verdict is None:
             # No resolvable subject: the engine never ran; count the refusal so an
             # all-misconfigured fleet doesn't show zero decisions.
-            record_pre_engine_refusal(self._engine.metrics)
+            self._engine.record_refusal()
         raise InvalidRequestError(message=refusal_message("agent invocation", verdict))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:

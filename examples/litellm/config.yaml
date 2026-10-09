@@ -1,0 +1,14 @@
+guardrails:
+  - guardrail_name: apparitor
+    litellm_params:
+      guardrail: examples.litellm.apparitor_guardrail.ApparitorGuardrail
+      mode:
+        - pre_call
+        - post_call
+      default_on: true
+  - guardrail_name: apparitor-mcp
+    litellm_params:
+      guardrail: examples.litellm.apparitor_guardrail.ApparitorMCPGuardrail
+      mode:
+        - pre_mcp_call
+      default_on: true

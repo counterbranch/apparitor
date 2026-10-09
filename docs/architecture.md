@@ -1,7 +1,8 @@
 # Architecture
 
-How apparitor turns an agent's tool call into an authorization decision, today via its
-LlamaFirewall scanner and the AuthZEN evaluation pipeline. Design rationale lives in
+How apparitor turns an agent's tool call into an authorization decision. The LlamaFirewall
+scanner below is one adapter over the shared `AuthorizationEngine`, alongside NeMo,
+FastMCP, A2A and the unreleased LiteLLM guardrail. Design rationale lives in
 [requirements.md](requirements.md); this document focuses on the runtime shape.
 
 ## Where it sits
@@ -75,11 +76,31 @@ LlamaFirewall → Agent  : blocked (tool not dispatched)
 | `nemo.py` | `nemoguardrails` | NeMo Guardrails rail adapter (`NeMoAuthorizationRails`); same engine as scanner |
 | `fastmcp.py` | `fastmcp` | FastMCP server middleware (`FastMCPAuthorizationMiddleware`); subject from OAuth token |
 | `a2a.py` | `a2a-sdk` | A2A agent-executor adapter (`A2AAuthorizationExecutor`); subject from authenticated peer |
+| `litellm.py` | `litellm` | Proxy guardrail (`LiteLLMAuthorizationGuardrail`); authenticated key owner; declaration and returned-call checks |
+| `audit.py` | none | Bounded typed evidence, trusted metadata scopes, JSONL sinks, argument HMACs and operational summaries |
+| `collector.py` | none | Durable local SQLite outbox, leases, bounded delivery retries and idempotent receipts |
 
 Each optional-dep module is isolated so the core imports without it; missing deps raise
 `MissingDependencyError`. All optional-dep adapters (`AuthZENScanner`, `NeMoAuthorizationRails`,
-`FastMCPAuthorizationMiddleware`, `A2AAuthorizationExecutor`, `CedarBackend`) are exposed lazily
+`FastMCPAuthorizationMiddleware`, `A2AAuthorizationExecutor`, `LiteLLMAuthorizationGuardrail`,
+`CedarBackend`) are exposed lazily
 (PEP 562 `__getattr__`) so `import apparitor` succeeds without any optional extra installed.
+
+## Typed evidence and local delivery
+
+The unreleased evidence path records authorization separately from host-observed execution.
+Hosts supply trusted tenant, identity, policy and trace references; raw arguments and output
+content are not retained. Optional tenant-bound argument HMACs distinguish exact calls.
+Evidence emission failures leave the authorization verdict unchanged and are counted visibly.
+See [observe-events.md](observe-events.md) for the contract and provenance limits.
+
+`LocalAuditCollector` persists pending events in a bounded SQLite outbox. Its explicit
+transport delivers batches and removes only acknowledged IDs; leases and receipts support
+restart, retry and duplicate delivery. The [Observe reference](observe.md) ingests these
+events into tenant-separated storage and exposes search, traces, summaries and operational
+alerts. Its dashboard has summary controls; the other views are HTTP API capabilities.
+Managed deployment, retention and tamper evidence remain deployment work. See
+[collector.md](collector.md) and the [pipeline demo](observe-pipeline.md).
 
 ## Registration
 

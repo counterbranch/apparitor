@@ -11,7 +11,7 @@ other project space) to be respectful, welcoming, and constructive.
 ## Reporting
 
 To raise a conduct concern, report it privately to the maintainers through this
-repository's [GitHub private reporting](https://github.com/jhawlwut/apparitor/security/advisories/new).
+repository's [GitHub private reporting](https://github.com/counterbranch/apparitor/security/advisories/new).
 Reports reach the maintainers directly, are handled confidentially, and are
 reviewed promptly.
 
