@@ -23,10 +23,11 @@ result = await collector.flush(send)
 collector.close()
 ```
 
-The database parent must already exist and be owned by the current operating-system user.
-The collector rejects symlink database paths and sets the database mode to `0600`. SQLite
-uses WAL mode and `synchronous=FULL`. A separate collector instance can reopen the queue
-after a process restart.
+The database parent must already exist, be owned by the current operating-system user,
+and exclude group/world write access. The collector rejects symlink database and sidecar
+paths and secures the database, WAL and SHM files to `0600`, including on reopen. SQLite
+uses WAL mode, `synchronous=FULL` and a 10-second busy timeout. A separate collector instance
+can reopen the queue after a process restart.
 
 Configure `max_event_bytes`, `max_pending_events`, and `max_pending_bytes` for the host's
 retention budget. These are transactional payload and row limits, not a strict filesystem

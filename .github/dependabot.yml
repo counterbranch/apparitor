@@ -1,7 +1,10 @@
 version: 2
 updates:
   - package-ecosystem: pip
-    directory: "/"
+    directories:
+      - "/"
+      - "/examples/api"
+      - "/examples/observe"
     schedule:
       interval: weekly
     groups:

@@ -506,15 +506,10 @@ class LiteLLMMCPAuthorizationGuardrail(LiteLLMAuthorizationGuardrail):
         with self._audit_scope(user_api_key_dict):
             if call_type != "call_mcp_tool":
                 raise self._boundary_refusal("MCP authorization requires an MCP execution route")
-            if not any(
-                key in data for key in ("mcp_tool_name", "mcp_arguments", "mcp_server_name")
-            ):
-                # LiteLLM also dispatches an initial REST/virtual-tool request before
-                # resolving the server. Only the later server-bound hook can authorize it.
-                if not isinstance(data.get("name"), str) or not data["name"].strip():
-                    raise self._boundary_refusal("MCP preliminary request could not be verified")
-                self._context(user_api_key_dict)
-                return data
+            # Raw REST routing fields are caller-controlled, even if mcp_* fields
+            # are also present. LiteLLM's resolved manager payload omits these keys.
+            if any(key in data for key in ("name", "arguments", "server_id")):
+                raise self._boundary_refusal("MCP execution context could not be verified")
             name = data.get("mcp_tool_name")
             server = data.get("mcp_server_name")
             arguments = data.get("mcp_arguments")

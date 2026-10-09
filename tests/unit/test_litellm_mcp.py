@@ -130,7 +130,7 @@ async def test_missing_auth_object_blocks_before_pdp() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unresolved_preliminary_request_checks_identity_without_authorizing() -> None:
+async def test_unresolved_preliminary_request_refuses_without_authorizing() -> None:
     requests = []
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: requests.append(request))
@@ -138,17 +138,98 @@ async def test_unresolved_preliminary_request_checks_identity_without_authorizin
         guardrail = LiteLLMMCPAuthorizationGuardrail("https://pdp.example.com", http_client=client)
         data = {"name": "documents-read_file", "arguments": {"path": "/public/example"}}
         try:
-            assert (
+            with pytest.raises(GuardrailRaisedException, match="MCP execution context"):
                 await guardrail.async_pre_call_hook(
                     UserAPIKeyAuth(user_id="alice"), object(), data, "call_mcp_tool"
                 )
-                is data
-            )
             with pytest.raises(GuardrailRaisedException):
                 await guardrail.async_pre_call_hook(
                     UserAPIKeyAuth(), object(), data, "call_mcp_tool"
                 )
             assert not requests
+        finally:
+            await guardrail.aclose()
+
+
+@pytest.mark.parametrize("route", ["virtual", "proxy", "rest", "forged_rest"])
+@pytest.mark.asyncio
+async def test_actual_virtual_pipeline_refuses_without_a_second_hook(monkeypatch, route) -> None:
+    proxy_utils = pytest.importorskip("litellm.proxy.utils", exc_type=ImportError)
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations, rest_endpoints, tool_search
+    from mcp.types import CallToolResult, TextContent
+    from starlette.requests import Request
+
+    requests = []
+    executed = []
+    sink = EvidenceSink()
+
+    # This downstream handler deliberately executes without another guardrail dispatch.
+    async def unchecked_executor(**kwargs):
+        executed.append(kwargs)
+        return CallToolResult(content=[TextContent(type="text", text="synthetic result")])
+
+    monkeypatch.setattr(tool_search, "handle_mcp_tool_call", unchecked_executor)
+    monkeypatch.setattr(tool_search, "handle_mcp_proxy_tool", unchecked_executor)
+    monkeypatch.setattr(
+        proxy_server, "proxy_logging_obj", proxy_utils.ProxyLogging(user_api_key_cache=DualCache())
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    auth = UserAPIKeyAuth(
+        user_id="alice",
+        object_permission={"object_permission_id": "test", "mcp_tool_search_enabled": True},
+    )
+    name = (
+        tool_search.MCP_PROXY_CALL_TOOL_NAME
+        if route == "proxy"
+        else tool_search.MCP_TOOL_CALL_TOOL_NAME
+    )
+    arguments = {"tool_name": "documents-read_file", "arguments": {"path": "/private"}}
+
+    async def invoke():
+        if route in ("rest", "forged_rest"):
+            data = {"name": name, "arguments": arguments}
+            if route == "forged_rest":
+                data.update(_data())
+            request = Request(
+                {"type": "http", "method": "POST", "path": "/tools/call", "headers": []}
+            )
+            return await rest_endpoints._handle_virtual_mcp_tool(request, data, name, auth)
+        return await operations._dispatch_virtual_mcp_tool(
+            name=name,
+            arguments=arguments,
+            user_api_key_auth=auth,
+            client_ip=None,
+            mcp_proxy_mode=route == "proxy",
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: requests.append(request) or httpx.Response(200, json={"decision": True})
+        )
+    ) as client:
+        guardrail = LiteLLMMCPAuthorizationGuardrail(
+            "https://pdp.example.com",
+            http_client=client,
+            audit_sink=sink,
+            audit_fingerprint_key=b"synthetic-test-key-at-least-32-bytes",
+            audit_metadata_resolver=lambda auth: AuditMetadata("unresolved", "tenant-a"),
+        )
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        try:
+            with pytest.raises(GuardrailRaisedException, match="MCP execution context"):
+                await invoke()
+            assert not executed
+            assert not requests
+            assert sink.records[0].event_kind == "boundary_refusal"
+            # Prove the real routing path reaches the deliberately unchecked executor
+            # when this guardrail is absent, rather than failing at an unrelated SDK seam.
+            monkeypatch.setattr(litellm, "callbacks", [])
+            result = await invoke()
+            assert result.content[0].text == "synthetic result"
+            assert len(executed) == 1
         finally:
             await guardrail.aclose()
 

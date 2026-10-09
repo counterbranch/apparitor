@@ -310,7 +310,7 @@ does not establish legal compliance.
 | [**NeMo Guardrails**](https://github.com/NVIDIA/NeMo-Guardrails) | NVIDIA | shipping (`NeMoAuthorizationRails`) |
 | [**FastMCP**](https://github.com/PrefectHQ/fastmcp) server middleware | Prefect | shipping (`FastMCPAuthorizationMiddleware`) |
 | [**A2A**](https://a2a-protocol.org/) agent executor | Linux Foundation | shipping (`A2AAuthorizationExecutor`) |
-| [**LiteLLM Proxy**](https://docs.litellm.ai/docs/proxy/guardrails/custom_guardrail) | BerriAI | unreleased (`LiteLLMAuthorizationGuardrail`); [setup and boundaries](docs/litellm.md) |
+| [**LiteLLM Proxy**](https://docs.litellm.ai/docs/proxy/guardrails/custom_guardrail) | BerriAI | unreleased (`LiteLLMAuthorizationGuardrail`, `LiteLLMMCPAuthorizationGuardrail`); [setup and boundaries](docs/litellm.md) |
 
 **Policy engines** (where the authorization decision is made). apparitor reaches these over
 AuthZEN; OPA and Cedar also have native backends that skip the AuthZEN hop, selected by

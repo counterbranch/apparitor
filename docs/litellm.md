@@ -199,12 +199,19 @@ containing `/` fail closed. A custom mapper must preserve the server boundary, a
 redaction settings; use `redact_arguments=False` if a policy must inspect values, and treat
 those values as untrusted tool input.
 
-LiteLLM also sends a preliminary REST or virtual-tool request through the same event before
-resolving a server. That stage checks authenticated identity and makes no authorization
-decision; the subsequent server-bound hook is the execution gate. This contract is qualified
-against LiteLLM 1.104.2's MCP manager and proxy dispatcher, using a synthetic outbound executor
-and PDP. Keep the proxy logger and callback registration present on all gateway execution
-paths. A direct manager call without a proxy logger does not dispatch Apparitor.
+Every invocation of this guardrail requires resolved `mcp_tool_name`, `mcp_arguments` and
+`mcp_server_name`. Preliminary REST or virtual-tool payloads without that context are refused,
+even for authenticated callers. This prevents an unresolved call from proceeding in expectation
+of a later authorization hook. Raw REST routing fields (`name`, `arguments`, `server_id`)
+also cause refusal, including when callers supply forged `mcp_*` fields alongside them.
+LiteLLM's virtual `mcp_tool_call` and `/mcp/proxy` `call_tool` wrappers
+are therefore unsupported when they dispatch unresolved payloads through `pre_mcp_call`.
+
+This contract is qualified against LiteLLM 1.104.2's MCP manager and virtual-tool pipeline,
+using a synthetic outbound executor and PDP. Keep the proxy logger and callback registration
+present on all gateway execution paths. A direct manager call without a proxy logger does not
+invoke this adapter and is outside its enforcement boundary; deploy upstream FastMCP middleware
+if callers can reach that path. No callback can intercept an executor that never invokes it.
 
 Each invocation is authorized separately; there is no atomic batch authorization. Deny,
 human-review and PDP-error outcomes stop execution. Authorization evidence does not prove

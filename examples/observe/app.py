@@ -5,6 +5,8 @@ import hmac
 import json
 import os
 import sqlite3
+import stat
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +24,7 @@ MAX_PAGE_SIZE = 100
 MAX_SUMMARY_EVENTS = 1_000
 MAX_TEXT = 256
 MAX_REFS = 64
+SQLITE_BUSY_TIMEOUT_MS = 10_000
 
 
 class Credential(BaseModel):
@@ -125,18 +128,52 @@ def _credentials_from_env() -> dict[str, Credential]:
     return {token: Credential.model_validate(value) for token, value in parsed.items()}
 
 
+def _protect_database_files(path: Path) -> None:
+    for suffix in ("", "-wal", "-shm"):
+        candidate = Path(f"{path}{suffix}")
+        try:
+            before = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise ValueError("database and sidecars must be owned, regular files")
+        if before.st_uid != os.getuid():
+            raise ValueError("database and sidecars must be owned, regular files")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(candidate, flags)
+        try:
+            after = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(after.st_mode)
+                or after.st_uid != os.getuid()
+                or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise ValueError("database file changed while securing it")
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
+
+
 def _prepare_database(path: Path) -> None:
     parent = path.parent
     parent_stat = parent.lstat()
-    if parent.is_symlink() or not parent.is_dir() or parent_stat.st_uid != os.getuid():
-        raise ValueError("database parent must be an owned, regular directory")
+    if (
+        parent.is_symlink()
+        or not parent.is_dir()
+        or parent_stat.st_uid != os.getuid()
+        or parent_stat.st_mode & 0o022
+    ):
+        raise ValueError("database parent must be an owned, private directory")
+    _protect_database_files(path)
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags, 0o600)
     except FileExistsError:
-        file_stat = path.lstat()
-        if path.is_symlink() or not path.is_file() or file_stat.st_uid != os.getuid():
-            raise ValueError("database must be an owned, regular file") from None
-        os.chmod(path, 0o600)
+        _protect_database_files(path)
     else:
         os.close(descriptor)
 
@@ -156,10 +193,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         _prepare_database(db_path)
-        connection = sqlite3.connect(db_path, check_same_thread=False)
+        connection = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA synchronous=FULL")
         connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS events (
                 tenant_ref TEXT NOT NULL,
@@ -177,7 +215,9 @@ def create_app(
         connection.execute(
             "CREATE INDEX IF NOT EXISTS events_tenant_trace ON events(tenant_ref, trace_id)"
         )
+        _protect_database_files(db_path)
         application.state.db = connection
+        application.state.db_lock = threading.RLock()
         try:
             yield
         finally:
@@ -244,7 +284,7 @@ def create_app(
             canonical.append((event, encoded, digest))
         db: sqlite3.Connection = request.app.state.db
         try:
-            with db:
+            with request.app.state.db_lock, db:
                 for event, encoded, digest in canonical:
                     existing = db.execute(
                         "SELECT event_hash FROM events WHERE tenant_ref=? AND evidence_id=?",
@@ -263,6 +303,7 @@ def create_app(
                             digest,
                         ),
                     )
+                _protect_database_files(db_path)
         except sqlite3.DatabaseError as exc:
             raise HTTPException(status_code=503, detail="durable ingest failed") from exc
         return {"acknowledged_ids": [event.evidence_id for event, _, _ in canonical]}
@@ -282,10 +323,11 @@ def create_app(
             sql += " AND trace_id=?"
             params.append(trace_id)
         count_sql = sql.replace("SELECT event_json", "SELECT COUNT(*)")
-        total = request.app.state.db.execute(count_sql, params).fetchone()[0]
-        direction = "DESC" if newest_first else "ASC"
-        sql += f" ORDER BY observed_at {direction}, evidence_id {direction} LIMIT ? OFFSET ?"
-        rows = request.app.state.db.execute(sql, [*params, limit, offset]).fetchall()
+        with request.app.state.db_lock:
+            total = request.app.state.db.execute(count_sql, params).fetchone()[0]
+            direction = "DESC" if newest_first else "ASC"
+            sql += f" ORDER BY observed_at {direction}, evidence_id {direction} LIMIT ? OFFSET ?"
+            rows = request.app.state.db.execute(sql, [*params, limit, offset]).fetchall()
         return [_decode_event(row["event_json"]) for row in rows], total
 
     @app.get("/v1/events")
@@ -345,12 +387,13 @@ def create_app(
             params.append(outcome)
         where = " AND ".join(clauses)
         db: sqlite3.Connection = request.app.state.db
-        total = db.execute(f"SELECT COUNT(*) FROM events WHERE {where}", params).fetchone()[0]
-        rows = db.execute(
-            f"SELECT event_json FROM events WHERE {where} "
-            "ORDER BY observed_at, evidence_id LIMIT ? OFFSET ?",
-            [*params, limit, offset],
-        ).fetchall()
+        with request.app.state.db_lock:
+            total = db.execute(f"SELECT COUNT(*) FROM events WHERE {where}", params).fetchone()[0]
+            rows = db.execute(
+                f"SELECT event_json FROM events WHERE {where} "
+                "ORDER BY observed_at, evidence_id LIMIT ? OFFSET ?",
+                [*params, limit, offset],
+            ).fetchall()
         return {
             "items": [_decode_event(row["event_json"]) for row in rows],
             "total": total,
@@ -376,10 +419,11 @@ def create_app(
         request: Request,
         principal: Annotated[Principal, Depends(authenticate_reader)],
     ) -> dict[str, Any]:
-        row = request.app.state.db.execute(
-            "SELECT event_json FROM events WHERE tenant_ref=? AND evidence_id=?",
-            (principal.tenant_ref, evidence_id),
-        ).fetchone()
+        with request.app.state.db_lock:
+            row = request.app.state.db.execute(
+                "SELECT event_json FROM events WHERE tenant_ref=? AND evidence_id=?",
+                (principal.tenant_ref, evidence_id),
+            ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="event not found")
         return _decode_event(row["event_json"])

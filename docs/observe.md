@@ -43,8 +43,11 @@ inspect at most the most recent 1,000 tenant events and return the tenant total,
 inspected, and a `truncated` flag. Treat truncated results as a recent window rather than
 whole-history metrics.
 
-This example serializes its bounded SQLite operations on one application thread. It is a
-single-process reference rather than a production-throughput architecture. It does not
+This example serializes its shared SQLite connection with a process-local lock; separate
+processes coordinate through WAL and a 10-second busy timeout. Database directories must be
+owned by the service user and exclude group/world write access. Database, WAL and SHM files
+are secured to `0600`; symlink and non-regular database files are refused. It remains a
+local reference rather than a production-throughput architecture. It does not
 provide a managed production UI,
 endpoint detection and response, automatic asset discovery, cryptographic evidence
 attestation, key rotation, retention administration, high availability, or a compliance

@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev]"
       - name: Ruff (lint)
         run: ruff check .
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev]"
       - name: Mypy (strict)
         run: mypy src/
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.10"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev]" "httpx==0.27.*" "pydantic==2.5.*" "respx==0.21.*"
       - name: Pytest (minimum dependency versions)
         run: pytest
@@ -69,7 +69,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       # LlamaFirewall (heavy ML stack) is intentionally NOT installed here — the
       # LlamaFirewall-free modules are the unit-test surface. The scaffold's import
       # guard is exercised by test_smoke. A separate job (added with the behavioural
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system build twine
       - run: python -m build
       - name: Twine check
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Install CPU-only torch then the scanner with LlamaFirewall
         run: |
           uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
@@ -136,7 +136,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev,cedar]"
       - name: Pytest (Cedar in-process backend, with cedarpy)
         run: pytest tests/unit/test_cedar_backend.py -p no:cacheprovider --no-cov
@@ -149,7 +149,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev,litellm]" "litellm[proxy]" -r examples/api/requirements.txt -r examples/observe/requirements.txt
       - name: Verify LiteLLM guardrail imports
         run: python -c "import fastapi; from litellm.proxy.utils import ProxyLogging; from apparitor import LiteLLMAuthorizationGuardrail, LiteLLMMCPAuthorizationGuardrail; import examples.observe.app"
@@ -166,7 +166,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev,nemo]"
       - name: Pytest (NeMo Guardrails rail adapter, with nemoguardrails)
         run: pytest tests/unit/test_nemo_backend.py -p no:cacheprovider --no-cov
@@ -187,7 +187,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       # Install the extra (so a broken `[fastmcp]` spec fails here) and intersect it with the
       # matrix leg's version constraint.
       - run: uv pip install --system -e ".[dev,fastmcp]" "${{ matrix.fastmcp-version }}"
@@ -209,7 +209,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Install CPU-only torch then every enforcement-point extra
         run: |
           uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
@@ -233,7 +233,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[fastmcp]" "${{ matrix.fastmcp-version }}"
       - name: Verify fastmcp imports
         run: python -c "import fastmcp, apparitor.fastmcp; print(fastmcp.__version__)"
@@ -250,7 +250,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       # Core only — that is the point: no optional extras needed for this walk-through.
       - run: uv pip install --system -e .
       - name: Run the scenario walk-through
@@ -268,7 +268,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       # Core only — the audit log and metrics need no optional extras.
       - run: uv pip install --system -e .
       - name: Run the observability walk-through
@@ -291,7 +291,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev,a2a]" "${{ matrix.a2a-version }}"
       - name: Verify a2a imports
         run: python -c "import a2a, apparitor.a2a; print('a2a-sdk ok')"
@@ -308,7 +308,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv pip install --system -e ".[dev,integration]"
       - name: Pytest (integration)
         # --no-cov: the package-wide coverage gate in addopts is meaningless for an
@@ -327,7 +327,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       # No Docker or testcontainers — the native backend fetches the pinned binary with the
       # stdlib and talks to it with httpx, both already covered by the base + [dev] install.
       - run: uv pip install --system -e ".[dev]"

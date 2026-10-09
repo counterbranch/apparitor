@@ -102,7 +102,7 @@ integration = ["testcontainers>=4"]
 # CycloneDX SBOM generator (see scripts/generate_sbom.sh). Pinned here — not in the shell
 # script — so Dependabot's pip ecosystem keeps it current, matching the repo's pinned-and-
 # maintained posture. Build-only tooling, like `build`/`twine`; never a runtime dependency.
-sbom = ["cyclonedx-bom==7.3.1"]
+sbom = ["cyclonedx-bom==7.5.0"]
 
 [project.urls]
 Homepage = "https://github.com/counterbranch/apparitor"

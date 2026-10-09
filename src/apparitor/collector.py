@@ -88,7 +88,7 @@ class LocalAuditCollector:
         self._connection = sqlite3.connect(
             self._path, timeout=10, isolation_level=None, check_same_thread=False
         )
-        os.chmod(self._path, 0o600)
+        self._protect_files()
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA synchronous=FULL")
         self._connection.execute("PRAGMA busy_timeout=10000")
@@ -114,13 +114,47 @@ class LocalAuditCollector:
             );
             """
         )
+        self._protect_files()
+
+    def _protect_files(self) -> None:
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(f"{self._path}{suffix}")
+            try:
+                before = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+                raise ValueError(
+                    "collector database and sidecars must be regular files, not symlinks"
+                )
+            if before.st_uid != os.getuid():
+                raise PermissionError("collector database and sidecars must be owned")
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(candidate, flags)
+            try:
+                after = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(after.st_mode)
+                    or after.st_uid != os.getuid()
+                    or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+                ):
+                    raise ValueError("collector database file changed while securing it")
+                os.fchmod(descriptor, 0o600)
+            finally:
+                os.close(descriptor)
 
     def _check_path(self) -> None:
         parent = self._path.parent
         if not parent.exists() or parent.is_symlink() or not parent.is_dir():
             raise ValueError("collector parent must be an existing real directory")
-        if parent.stat().st_uid != os.getuid():
+        parent_info = parent.stat()
+        if parent_info.st_uid != os.getuid():
             raise PermissionError("collector parent must be owned by the current user")
+        if parent_info.st_mode & 0o022:
+            raise PermissionError("collector parent must not be group- or world-writable")
+        self._protect_files()
         try:
             info = self._path.lstat()
         except FileNotFoundError:
