@@ -85,7 +85,7 @@ fastmcp = ["fastmcp>=2.14,!=3.0.*,<5"]
 a2a = ["a2a-sdk>=1.1,<2"]
 # Proxy custom-guardrail contract verified against the stable 1.104.2 release.
 # Keep this line narrow; new LiteLLM minors need explicit hook compatibility checks.
-litellm = ["litellm>=1.104.2,<1.105"]
+litellm = ["litellm>=1.104.2,<1.106"]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
